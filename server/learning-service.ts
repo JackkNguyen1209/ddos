@@ -70,7 +70,11 @@ export class LearningService {
     }
     
     if (samples.length > 0) {
-      await db.insert(trainingSamples).values(samples);
+      const BATCH_SIZE = 500;
+      for (let i = 0; i < samples.length; i += BATCH_SIZE) {
+        const batch = samples.slice(i, i + BATCH_SIZE);
+        await db.insert(trainingSamples).values(batch);
+      }
     }
     
     const totalSamples = await this.getTotalSamples();
@@ -170,11 +174,18 @@ export class LearningService {
       const thresholds: Record<string, { min: number; max: number; mean: number }> = {};
       
       for (let i = 0; i < featureNames.length; i++) {
-        const values = samples.map((s: InsertTrainingSample) => (s.features as number[])[i]);
-        const min = Math.min(...values);
-        const max = Math.max(...values);
-        const mean = values.reduce((a: number, b: number) => a + b, 0) / values.length;
+        let min = Infinity;
+        let max = -Infinity;
+        let sum = 0;
         
+        for (const s of samples) {
+          const val = (s.features as number[])[i];
+          if (val < min) min = val;
+          if (val > max) max = val;
+          sum += val;
+        }
+        
+        const mean = sum / samples.length;
         thresholds[featureNames[i]] = { min, max, mean };
       }
       

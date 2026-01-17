@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Shield, Database, Brain, BarChart3, Loader2, AlertTriangle, CheckCircle, Eye, Tag } from "lucide-react";
+import { Shield, Database, Brain, BarChart3, Loader2, AlertTriangle, CheckCircle, Eye, Tag, Sparkles } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { FileUpload } from "@/components/file-upload";
@@ -8,6 +8,7 @@ import { DataPreview } from "@/components/data-preview";
 import { ModelSelector } from "@/components/model-selector";
 import { AnalysisResults } from "@/components/analysis-results";
 import { EmptyState } from "@/components/empty-state";
+import { LearningStats } from "@/components/learning-stats";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -284,6 +285,14 @@ export default function Home() {
                 description="Chọn các mô hình ML và nhấn 'Bắt đầu phân tích' để xem kết quả phát hiện DDoS."
               />
             )}
+          </section>
+
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-semibold">Bước 5: Hệ Thống Tự Học</h2>
+            </div>
+            <LearningStats />
           </section>
         </div>
       </main>

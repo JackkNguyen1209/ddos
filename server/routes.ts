@@ -590,7 +590,7 @@ export async function registerRoutes(
         const attackClassification = bestResult.attackTypes || [];
         for (let i = 0; i < allRows.length; i++) {
           if (labels[i] === 1 && attackClassification.length > 0) {
-            attackTypes.push(attackClassification[0]?.attackType || "unknown");
+            attackTypes.push(attackClassification[0]?.type || "unknown");
           } else {
             attackTypes.push("normal");
           }
