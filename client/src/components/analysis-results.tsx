@@ -1,4 +1,4 @@
-import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle, Info, Zap } from "lucide-react";
+import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle, Info, Zap, BookOpen, CheckCircle2, XCircle, Lightbulb } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -21,7 +21,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { ML_MODELS, type AnalysisResult } from "@shared/schema";
+import { ML_MODELS, ALGORITHM_DETAILS, type AnalysisResult } from "@shared/schema";
 
 interface AnalysisResultsProps {
   results: AnalysisResult[];
@@ -144,9 +144,10 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="comparison" className="w-full">
-            <TabsList className="grid w-full grid-cols-4 mb-6">
+            <TabsList className="grid w-full grid-cols-5 mb-6">
               <TabsTrigger value="comparison" data-testid="tab-comparison">So sánh</TabsTrigger>
               <TabsTrigger value="radar" data-testid="tab-radar">Radar Chart</TabsTrigger>
+              <TabsTrigger value="algorithms" data-testid="tab-algorithms">Thuật toán</TabsTrigger>
               <TabsTrigger value="explanation" data-testid="tab-explanation">Giải thích</TabsTrigger>
               <TabsTrigger value="details" data-testid="tab-details">Chi tiết</TabsTrigger>
             </TabsList>
@@ -203,6 +204,10 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
                   </RadarChart>
                 </ResponsiveContainer>
               </div>
+            </TabsContent>
+
+            <TabsContent value="algorithms" className="space-y-4">
+              <AlgorithmExplanations results={results} getModelName={getModelName} />
             </TabsContent>
 
             <TabsContent value="explanation" className="space-y-6">
@@ -485,9 +490,204 @@ function DDoSExplanation({ result, getModelName }: DDoSExplanationProps) {
                 {ddosReasons[0]?.description}
               </p>
             )}
+            {result.ddosDetected === 0 && (
+              <div className="mt-4 p-4 rounded-lg bg-chart-3/10 border border-chart-3/30">
+                <p className="font-semibold text-chart-3 flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4" />
+                  Lưu ý quan trọng:
+                </p>
+                <p className="mt-2">
+                  Mô hình không phát hiện DDoS nào. Điều này có thể do:
+                </p>
+                <ul className="list-disc list-inside mt-1 space-y-1 text-muted-foreground">
+                  <li>Dataset không có cột nhãn (label) - mô hình không có dữ liệu huấn luyện để phân biệt DDoS</li>
+                  <li>Tất cả traffic trong dataset là bình thường</li>
+                  <li>Dataset đã được lọc và chỉ chứa traffic bình thường</li>
+                </ul>
+                <p className="mt-2">
+                  Để có kết quả chính xác, hãy sử dụng dataset có cột <strong>label</strong> với giá trị 0 (normal) và 1 (DDoS).
+                </p>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+interface AlgorithmExplanationsProps {
+  results: AnalysisResult[];
+  getModelName: (type: string) => string;
+}
+
+function AlgorithmExplanations({ results, getModelName }: AlgorithmExplanationsProps) {
+  return (
+    <div className="space-y-4">
+      <Card className="bg-primary/5">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <BookOpen className="h-5 w-5 text-primary" />
+            Cách Phân Tích Hoạt Động
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <p>
+              Hệ thống sử dụng phương pháp <strong>Supervised Machine Learning</strong> (Học máy có giám sát) để phát hiện DDoS:
+            </p>
+            <ol className="list-decimal list-inside space-y-2 mt-3">
+              <li><strong>Tiền xử lý dữ liệu:</strong> Làm sạch dataset bằng cách loại bỏ giá trị thiếu, dòng trùng lặp và outliers</li>
+              <li><strong>Trích xuất đặc trưng:</strong> Chọn các cột số làm features (src_port, dst_port, bytes, packets, duration, v.v.)</li>
+              <li><strong>Chuẩn hóa:</strong> Áp dụng Min-Max normalization để đưa tất cả features về khoảng [0, 1]</li>
+              <li><strong>Chia tập dữ liệu:</strong> 80% dùng để huấn luyện (training), 20% dùng để kiểm tra (testing)</li>
+              <li><strong>Huấn luyện:</strong> Mô hình học từ dữ liệu huấn luyện để phân biệt traffic DDoS và bình thường</li>
+              <li><strong>Dự đoán:</strong> Áp dụng mô hình đã huấn luyện lên toàn bộ dataset để phân loại</li>
+              <li><strong>Đánh giá:</strong> Tính các metrics (Accuracy, Precision, Recall, F1) trên tập testing</li>
+            </ol>
+          </div>
+        </CardContent>
+      </Card>
+
+      {results.map((result) => {
+        const details = ALGORITHM_DETAILS[result.modelType];
+        if (!details) return null;
+        
+        return (
+          <Card key={result.id}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Target className="h-5 w-5 text-primary" />
+                {getModelName(result.modelType)}
+              </CardTitle>
+              <CardDescription>
+                Accuracy: {(result.accuracy * 100).toFixed(1)}% | 
+                F1 Score: {(result.f1Score * 100).toFixed(1)}% |
+                Thời gian: {result.trainingTime.toFixed(2)}s
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <h4 className="font-semibold flex items-center gap-2 mb-2">
+                  <Lightbulb className="h-4 w-4 text-chart-3" />
+                  Cách hoạt động:
+                </h4>
+                <p className="text-sm text-muted-foreground">{details.howItWorks}</p>
+              </div>
+              
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <h4 className="font-semibold flex items-center gap-2 mb-2 text-chart-2">
+                    <CheckCircle2 className="h-4 w-4" />
+                    Điểm mạnh:
+                  </h4>
+                  <ul className="text-sm space-y-1">
+                    {details.strengths.map((s, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="text-chart-2">+</span>
+                        <span className="text-muted-foreground">{s}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <h4 className="font-semibold flex items-center gap-2 mb-2 text-destructive">
+                    <XCircle className="h-4 w-4" />
+                    Điểm yếu:
+                  </h4>
+                  <ul className="text-sm space-y-1">
+                    {details.weaknesses.map((w, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="text-destructive">-</span>
+                        <span className="text-muted-foreground">{w}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+              
+              <div className="rounded-lg bg-accent/50 p-3">
+                <h4 className="font-semibold flex items-center gap-2 text-sm">
+                  <Target className="h-4 w-4 text-primary" />
+                  Phù hợp nhất cho:
+                </h4>
+                <p className="text-sm text-muted-foreground mt-1">{details.bestFor}</p>
+              </div>
+              
+              <ResultInterpretation result={result} getModelName={getModelName} />
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+interface ResultInterpretationProps {
+  result: AnalysisResult;
+  getModelName: (type: string) => string;
+}
+
+function ResultInterpretation({ result, getModelName }: ResultInterpretationProps) {
+  const total = result.ddosDetected + result.normalTraffic;
+  const ddosPercent = total > 0 ? (result.ddosDetected / total * 100).toFixed(1) : "0";
+  const cm = result.confusionMatrix;
+  
+  const hasNoLabels = cm.truePositive === 0 && cm.falsePositive === 0 && cm.falseNegative === 0;
+  const isPerfectNormal = result.accuracy === 1 && result.ddosDetected === 0;
+  
+  return (
+    <div className="border-t pt-4">
+      <h4 className="font-semibold flex items-center gap-2 mb-3">
+        <Info className="h-4 w-4 text-primary" />
+        Diễn giải kết quả:
+      </h4>
+      
+      {isPerfectNormal && hasNoLabels ? (
+        <div className="space-y-2 text-sm">
+          <div className="p-3 rounded-lg bg-chart-3/10 border border-chart-3/30">
+            <p className="font-medium text-chart-3">Cảnh báo: Kết quả có thể không chính xác</p>
+            <p className="text-muted-foreground mt-1">
+              Accuracy 100% và 0 DDoS detected thường xảy ra khi dataset <strong>không có cột label</strong>. 
+              Trong trường hợp này, mô hình mặc định coi tất cả traffic là bình thường vì không có dữ liệu 
+              huấn luyện để phân biệt DDoS.
+            </p>
+          </div>
+          <p className="text-muted-foreground">
+            <strong>Giải pháp:</strong> Sử dụng dataset có cột <code className="bg-accent px-1 rounded">label</code>, 
+            <code className="bg-accent px-1 rounded">class</code>, hoặc <code className="bg-accent px-1 rounded">attack</code> 
+            với giá trị 0 (normal) và 1 (DDoS) để mô hình có thể học và phân loại.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2 text-sm text-muted-foreground">
+          <p>
+            <strong>{getModelName(result.modelType)}</strong> đã phân tích {total.toLocaleString()} mẫu traffic và 
+            phát hiện <strong className="text-destructive">{ddosPercent}%</strong> là tấn công DDoS.
+          </p>
+          
+          {result.precision > 0 && (
+            <p>
+              <strong>Precision {(result.precision * 100).toFixed(1)}%:</strong> Trong các mẫu được dự đoán là DDoS, 
+              {(result.precision * 100).toFixed(0)}% thực sự là DDoS (không báo động giả).
+            </p>
+          )}
+          
+          {result.recall > 0 && (
+            <p>
+              <strong>Recall {(result.recall * 100).toFixed(1)}%:</strong> Mô hình phát hiện được 
+              {(result.recall * 100).toFixed(0)}% tổng số cuộc tấn công DDoS trong dataset.
+            </p>
+          )}
+          
+          <p>
+            <strong>Confusion Matrix:</strong> TP={cm.truePositive} (đúng DDoS), 
+            TN={cm.trueNegative} (đúng Normal), 
+            FP={cm.falsePositive} (báo động giả), 
+            FN={cm.falseNegative} (bỏ sót tấn công).
+          </p>
+        </div>
+      )}
     </div>
   );
 }
