@@ -1,37 +1,47 @@
-import { type User, type InsertUser } from "@shared/schema";
 import { randomUUID } from "crypto";
-
-// modify the interface with any CRUD methods
-// you might need
+import type { Dataset, DataRow, AnalysisResult, MLModelType } from "@shared/schema";
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  setDataset(dataset: Dataset, previewData: DataRow[]): Promise<void>;
+  getDataset(): Promise<{ dataset: Dataset; previewData: DataRow[] } | null>;
+  addResult(result: AnalysisResult): Promise<void>;
+  getResults(): Promise<AnalysisResult[]>;
+  clearResults(): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
-  private users: Map<string, User>;
+  private dataset: Dataset | null = null;
+  private previewData: DataRow[] = [];
+  private results: AnalysisResult[] = [];
 
-  constructor() {
-    this.users = new Map();
+  async setDataset(dataset: Dataset, previewData: DataRow[]): Promise<void> {
+    this.dataset = dataset;
+    this.previewData = previewData;
+    this.results = [];
   }
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+  async getDataset(): Promise<{ dataset: Dataset; previewData: DataRow[] } | null> {
+    if (!this.dataset) return null;
+    return { dataset: this.dataset, previewData: this.previewData };
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
+  async addResult(result: AnalysisResult): Promise<void> {
+    const existingIndex = this.results.findIndex(
+      (r) => r.modelType === result.modelType
     );
+    if (existingIndex >= 0) {
+      this.results[existingIndex] = result;
+    } else {
+      this.results.push(result);
+    }
   }
 
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+  async getResults(): Promise<AnalysisResult[]> {
+    return [...this.results];
+  }
+
+  async clearResults(): Promise<void> {
+    this.results = [];
   }
 }
 
