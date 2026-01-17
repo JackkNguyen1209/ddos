@@ -1516,24 +1516,49 @@ function calculateFeatureImportance(
 ): FeatureImportance[] {
   const importances: FeatureImportance[] = [];
   
+  // Check if we have any DDoS predictions
+  const hasDDoS = labels.some((l) => l === 1);
+  
   for (let i = 0; i < featureColumns.length; i++) {
     const featureValues = features.map((f) => f[i]);
     
-    const ddosValues = featureValues.filter((_, idx) => labels[idx] === 1);
-    const normalValues = featureValues.filter((_, idx) => labels[idx] === 0);
+    let importance: number;
     
-    const ddosMean = ddosValues.length > 0 ? ddosValues.reduce((a, b) => a + b, 0) / ddosValues.length : 0;
-    const normalMean = normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : 0;
-    
-    const ddosVar = ddosValues.length > 0 
-      ? ddosValues.reduce((sum, v) => sum + Math.pow(v - ddosMean, 2), 0) / ddosValues.length 
-      : 1;
-    const normalVar = normalValues.length > 0 
-      ? normalValues.reduce((sum, v) => sum + Math.pow(v - normalMean, 2), 0) / normalValues.length 
-      : 1;
-    
-    const pooledStd = Math.sqrt((ddosVar + normalVar) / 2) || 1;
-    const importance = Math.abs(ddosMean - normalMean) / pooledStd;
+    if (hasDDoS) {
+      // Standard approach: compare DDoS vs Normal samples
+      const ddosValues = featureValues.filter((_, idx) => labels[idx] === 1);
+      const normalValues = featureValues.filter((_, idx) => labels[idx] === 0);
+      
+      const ddosMean = ddosValues.length > 0 ? ddosValues.reduce((a, b) => a + b, 0) / ddosValues.length : 0;
+      const normalMean = normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : 0;
+      
+      const ddosVar = ddosValues.length > 0 
+        ? ddosValues.reduce((sum, v) => sum + Math.pow(v - ddosMean, 2), 0) / ddosValues.length 
+        : 1;
+      const normalVar = normalValues.length > 0 
+        ? normalValues.reduce((sum, v) => sum + Math.pow(v - normalMean, 2), 0) / normalValues.length 
+        : 1;
+      
+      const pooledStd = Math.sqrt((ddosVar + normalVar) / 2) || 1;
+      importance = Math.abs(ddosMean - normalMean) / pooledStd;
+    } else {
+      // No DDoS predictions - use variance-based importance
+      // Features with high variance are potentially more important for anomaly detection
+      const mean = featureValues.reduce((a, b) => a + b, 0) / featureValues.length;
+      const variance = featureValues.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / featureValues.length;
+      const std = Math.sqrt(variance);
+      
+      // Coefficient of variation (normalized variance)
+      const coeffOfVar = mean !== 0 ? std / Math.abs(mean) : std;
+      
+      // Also consider the range of values
+      const max = Math.max(...featureValues);
+      const min = Math.min(...featureValues);
+      const range = max - min;
+      
+      // Combine CV and normalized range
+      importance = Math.min((coeffOfVar + (range / (max || 1))) / 2, 1);
+    }
     
     importances.push({
       feature: featureColumns[i],
@@ -1558,25 +1583,58 @@ function generateDDoSReasons(
   
   const topFeatures = featureImportance.slice(0, 5);
   
+  // If no DDoS predictions, use overall statistics
+  const hasDDoSPredictions = ddosIndices.length > 0;
+  
   for (const fi of topFeatures) {
     const featureIdx = featureColumns.indexOf(fi.feature);
     if (featureIdx === -1) continue;
     
-    const ddosValues = ddosIndices.map((i) => features[i][featureIdx]);
-    const normalValues = normalIndices.map((i) => features[i][featureIdx]);
-    
-    const ddosMean = ddosValues.length > 0 ? ddosValues.reduce((a, b) => a + b, 0) / ddosValues.length : 0;
-    const normalMean = normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : 0;
-    
-    const threshold = (ddosMean + normalMean) / 2;
-    
-    reasons.push({
-      feature: fi.feature,
-      value: ddosMean,
-      threshold: threshold,
-      contribution: fi.importance,
-      description: fi.description,
-    });
+    if (hasDDoSPredictions) {
+      // Mode with DDoS predictions - use labeled data
+      const ddosValues = ddosIndices.map((i) => features[i][featureIdx]);
+      const normalValues = normalIndices.map((i) => features[i][featureIdx]);
+      
+      const ddosMean = ddosValues.length > 0 ? ddosValues.reduce((a, b) => a + b, 0) / ddosValues.length : 0;
+      const normalMean = normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : 0;
+      
+      const threshold = (ddosMean + normalMean) / 2;
+      
+      reasons.push({
+        feature: fi.feature,
+        value: ddosMean,
+        threshold: threshold,
+        contribution: fi.importance,
+        description: fi.description,
+      });
+    } else {
+      // No DDoS predictions - use overall feature statistics
+      const allValues = features.map((f) => f[featureIdx]);
+      const mean = allValues.reduce((a, b) => a + b, 0) / allValues.length;
+      const max = Math.max(...allValues);
+      const min = Math.min(...allValues);
+      const std = Math.sqrt(allValues.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / allValues.length);
+      
+      // Calculate how extreme the values are (normalized anomaly score)
+      const range = max - min || 1;
+      const normalizedMean = (mean - min) / range;
+      const coeffOfVar = std / (mean || 1); // Coefficient of variation
+      
+      // Threshold based on standard deviation
+      const threshold = mean + std;
+      
+      // Use coefficient of variation as contribution indicator
+      // High variation = high contribution potential
+      const contribution = Math.min(coeffOfVar, 1);
+      
+      reasons.push({
+        feature: fi.feature,
+        value: mean,
+        threshold: threshold,
+        contribution: contribution,
+        description: fi.description + ` (Phạm vi: ${min.toFixed(2)} - ${max.toFixed(2)}, Độ lệch chuẩn: ${std.toFixed(2)})`,
+      });
+    }
   }
   
   return reasons;
