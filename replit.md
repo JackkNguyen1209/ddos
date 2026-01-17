@@ -16,6 +16,7 @@ A machine learning application for detecting DDoS (Distributed Denial of Service
 - **Feature Contract**: Auto-validates required features (timing, volume, packets) and optional features (network, protocol, labels)
 - **Schema Detection**: Auto-detects if uploaded file is a schema/dictionary description vs actual data
 - **Data Quality Reports**: Missing rate, invalid values, valid rows count for unlabeled data
+- **Self-Learning System**: Remembers uploaded data across sessions and continuously improves detection accuracy
 
 ## User Preferences
 
@@ -90,3 +91,22 @@ Preferred communication style: Simple, everyday language.
 ### Replit-specific
 - `@replit/vite-plugin-runtime-error-modal`: Error overlay in development
 - `@replit/vite-plugin-cartographer`: Replit integration
+
+## Docker Deployment
+
+The project includes Docker configuration for easy deployment:
+- `Dockerfile`: Builds the production image
+- `docker-compose.yml`: Orchestrates app + PostgreSQL database
+- `docker-entrypoint.sh`: Handles database migrations on startup
+- `.env.example`: Template for environment variables
+
+Run with: `docker compose up -d`
+Access at: http://localhost:8000
+
+## Self-Learning System
+
+The app includes a persistent learning system that accumulates knowledge across sessions:
+- **Database tables**: training_samples, model_performance, learning_sessions, learned_patterns
+- **LearningService**: Handles sample accumulation, pattern learning with batch processing (500 samples/batch)
+- **API endpoints**: /api/learning/stats, /api/learning/patterns, /api/learning/learn
+- **UI component**: LearningStats displays accumulated samples, learned patterns, and model improvements
