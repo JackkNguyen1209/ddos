@@ -68,6 +68,41 @@ export const insertLearnedPatternSchema = createInsertSchema(learnedPatterns).om
 export type InsertLearnedPattern = z.infer<typeof insertLearnedPatternSchema>;
 export type LearnedPattern = typeof learnedPatterns.$inferSelect;
 
+// User feedback/corrections on analysis results
+export const userFeedback = pgTable("user_feedback", {
+  id: serial("id").primaryKey(),
+  rowIndex: integer("row_index").notNull(),
+  originalLabel: text("original_label"),
+  correctedLabel: text("corrected_label").notNull(),
+  isAttack: boolean("is_attack").notNull(),
+  category: text("category").notNull(),
+  severity: text("severity").notNull(),
+  userNotes: text("user_notes"),
+  features: jsonb("features"),
+  datasetName: text("dataset_name"),
+  isApplied: boolean("is_applied").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertUserFeedbackSchema = createInsertSchema(userFeedback).omit({ id: true, createdAt: true });
+export type InsertUserFeedback = z.infer<typeof insertUserFeedbackSchema>;
+export type UserFeedback = typeof userFeedback.$inferSelect;
+
+// Custom tags for data rows
+export const userTags = pgTable("user_tags", {
+  id: serial("id").primaryKey(),
+  tagName: text("tag_name").notNull(),
+  tagColor: text("tag_color").notNull(),
+  description: text("description"),
+  isAttackTag: boolean("is_attack_tag").default(false).notNull(),
+  usageCount: integer("usage_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertUserTagSchema = createInsertSchema(userTags).omit({ id: true, createdAt: true });
+export type InsertUserTag = z.infer<typeof insertUserTagSchema>;
+export type UserTag = typeof userTags.$inferSelect;
+
 // Detection Mode - Supervised (có nhãn) vs Unlabeled (không có nhãn)
 export const detectionModes = ["supervised", "unlabeled"] as const;
 export type DetectionMode = typeof detectionModes[number];

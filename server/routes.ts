@@ -913,5 +913,188 @@ export async function registerRoutes(
     res.json({ categories });
   });
 
+  // ============== USER FEEDBACK & REVIEW SYSTEM ==============
+  
+  // Get all user feedback
+  app.get("/api/feedback", async (req, res) => {
+    try {
+      const feedback = await storage.getAllFeedback();
+      res.json({ feedback, total: feedback.length });
+    } catch (error) {
+      console.error("Get feedback error:", error);
+      res.status(500).json({ error: "Failed to get feedback" });
+    }
+  });
+  
+  // Submit user feedback/correction for a row
+  app.post("/api/feedback", async (req, res) => {
+    try {
+      const { rowIndex, originalLabel, correctedLabel, isAttack, category, severity, userNotes, features, datasetName } = req.body;
+      
+      if (rowIndex === undefined || !correctedLabel || !category || !severity) {
+        return res.status(400).json({ error: "Missing required fields: rowIndex, correctedLabel, category, severity" });
+      }
+      
+      const feedback = await storage.addFeedback({
+        rowIndex,
+        originalLabel: originalLabel || null,
+        correctedLabel,
+        isAttack: Boolean(isAttack),
+        category,
+        severity,
+        userNotes: userNotes || null,
+        features: features || null,
+        datasetName: datasetName || null,
+        isApplied: false,
+      });
+      
+      // Also add to custom labels if not exists
+      addCustomLabel(correctedLabel, {
+        isAttack: Boolean(isAttack),
+        category: category as LabelCategory,
+        severity: severity as 'low' | 'medium' | 'high' | 'critical',
+        description: userNotes || `Label do người dùng định nghĩa`,
+      });
+      
+      res.json({
+        success: true,
+        message: `Đã lưu phản hồi cho dòng ${rowIndex}`,
+        feedback,
+      });
+    } catch (error) {
+      console.error("Add feedback error:", error);
+      res.status(500).json({ error: "Failed to add feedback" });
+    }
+  });
+  
+  // Apply all pending feedback to learning system
+  app.post("/api/feedback/apply", async (req, res) => {
+    try {
+      const pendingFeedback = await storage.getPendingFeedback();
+      
+      if (pendingFeedback.length === 0) {
+        return res.json({ success: true, message: "Không có phản hồi nào cần áp dụng", applied: 0 });
+      }
+      
+      let applied = 0;
+      for (const fb of pendingFeedback) {
+        // Mark as applied (features are stored for future batch training)
+        await storage.markFeedbackApplied(fb.id);
+        applied++;
+        
+        // The corrected label is already added to custom labels when feedback was submitted
+        // Features can be used for batch training later via /api/learning/learn
+      }
+      
+      res.json({
+        success: true,
+        message: `Đã áp dụng ${applied} phản hồi vào hệ thống học`,
+        applied,
+      });
+    } catch (error) {
+      console.error("Apply feedback error:", error);
+      res.status(500).json({ error: "Failed to apply feedback" });
+    }
+  });
+  
+  // Delete feedback
+  app.delete("/api/feedback/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await storage.deleteFeedback(id);
+      res.json({ success: true, message: "Đã xóa phản hồi" });
+    } catch (error) {
+      console.error("Delete feedback error:", error);
+      res.status(500).json({ error: "Failed to delete feedback" });
+    }
+  });
+  
+  // ============== USER TAGS SYSTEM ==============
+  
+  // Get all tags
+  app.get("/api/tags", async (req, res) => {
+    try {
+      const tags = await storage.getAllTags();
+      res.json({ tags, total: tags.length });
+    } catch (error) {
+      console.error("Get tags error:", error);
+      res.status(500).json({ error: "Failed to get tags" });
+    }
+  });
+  
+  // Create a new tag
+  app.post("/api/tags", async (req, res) => {
+    try {
+      const { tagName, tagColor, description, isAttackTag } = req.body;
+      
+      if (!tagName || !tagColor) {
+        return res.status(400).json({ error: "tagName and tagColor are required" });
+      }
+      
+      const tag = await storage.addTag({
+        tagName,
+        tagColor,
+        description: description || null,
+        isAttackTag: Boolean(isAttackTag),
+        usageCount: 0,
+      });
+      
+      res.json({ success: true, tag });
+    } catch (error) {
+      console.error("Add tag error:", error);
+      res.status(500).json({ error: "Failed to add tag" });
+    }
+  });
+  
+  // Update tag usage count
+  app.put("/api/tags/:id/use", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await storage.incrementTagUsage(id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Update tag error:", error);
+      res.status(500).json({ error: "Failed to update tag" });
+    }
+  });
+  
+  // Delete tag
+  app.delete("/api/tags/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await storage.deleteTag(id);
+      res.json({ success: true, message: "Đã xóa tag" });
+    } catch (error) {
+      console.error("Delete tag error:", error);
+      res.status(500).json({ error: "Failed to delete tag" });
+    }
+  });
+  
+  // Get review summary for current dataset
+  app.get("/api/review/summary", async (req, res) => {
+    try {
+      const datasetData = await storage.getDataset();
+      if (!datasetData) {
+        return res.status(404).json({ error: "No dataset available" });
+      }
+      
+      const allRows: DataRow[] = (global as any).__datasetRows || [];
+      const feedback = await storage.getAllFeedback();
+      const tags = await storage.getAllTags();
+      
+      res.json({
+        totalRows: allRows.length,
+        feedbackCount: feedback.length,
+        pendingFeedback: feedback.filter(f => !f.isApplied).length,
+        appliedFeedback: feedback.filter(f => f.isApplied).length,
+        availableTags: tags.length,
+        datasetName: datasetData.dataset.name,
+      });
+    } catch (error) {
+      console.error("Review summary error:", error);
+      res.status(500).json({ error: "Failed to get review summary" });
+    }
+  });
+
   return httpServer;
 }

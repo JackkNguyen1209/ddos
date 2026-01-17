@@ -10,6 +10,7 @@ import { AnalysisResults } from "@/components/analysis-results";
 import { EmptyState } from "@/components/empty-state";
 import { LearningStats } from "@/components/learning-stats";
 import { FeatureReport } from "@/components/feature-report";
+import { ReviewPanel } from "@/components/review-panel";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -334,10 +335,13 @@ export default function Home() {
 
           <section>
             <div className="flex items-center gap-2 mb-4">
-              <Sparkles className="h-5 w-5 text-primary" />
-              <h2 className="text-lg font-semibold">Bước 5: Hệ Thống Tự Học</h2>
+              <Eye className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-semibold">Bước 5: Đánh Giá & Gắn Tag</h2>
             </div>
-            <LearningStats />
+            <div className="grid md:grid-cols-2 gap-4">
+              <ReviewPanel />
+              <LearningStats />
+            </div>
           </section>
         </div>
       </main>
