@@ -1,0 +1,242 @@
+Tách hẳn pipeline Supervised vs Unlabeled (bỏ metrics ảo)
+Mục tiêu
+
+Nếu user chọn mode = "unlabeled" hoặc dataset không có label thực sự → KHÔNG chạy supervised metrics (accuracy/precision/recall/f1).
+
+Chỉ trả: anomaly report + top anomalies + summary.
+
+File cần sửa
+
+server/routes.ts (endpoint /api/analyze)
+
+server/ml-algorithms.ts (thêm hàm analyzeUnlabeled())
+
+Patch chi tiết
+1) Ở server/routes.ts /api/analyze
+
+Hiện bạn đang:
+
+gọi analyzeWithModel(...) cho mọi mode
+
+rồi đính unlabeledReport
+
+Sửa thành:
+
+Parse dataset → extractFeatures() để biết hasLabel
+
+Nếu mode === "unlabeled" hoặc !hasLabel:
+
+gọi runAnomalyDetection(...)
+
+trả response dạng unlabeled (không metrics)
+
+Nếu supervised:
+
+gọi analyzeWithModel(...) bình thường
+
+Pseudo-code
+
+const { features, labels, featureNames, hasLabel } = extractFeatures(rows);
+
+const requestedMode = mode; // 'supervised' | 'unlabeled'
+
+const effectiveMode =
+  requestedMode === 'unlabeled' || !hasLabel ? 'unlabeled' : 'supervised';
+
+if (effectiveMode === 'unlabeled') {
+  const anomaly = runAnomalyDetection(features, featureNames, { seed });
+  return res.json({
+    mode: 'unlabeled',
+    modelType: 'anomaly-ensemble',
+    metrics: null,
+    ...anomaly,
+  });
+}
+
+// supervised
+const result = analyzeWithModel(dataset, modelType, { seed, /* maybe split */});
+return res.json({ mode: 'supervised', ...result });
+
+
+Note: Với compare models, nếu effectiveMode === 'unlabeled' thì không compare supervised model nữa; chỉ trả anomaly report.
+
+2) Chuẩn hoá response cho unlabeled
+
+metrics: null
+
+ddosDetected có thể dựa trên tỷ lệ anomalies vượt ngưỡng hoặc top score > threshold
+
+analysisText mô tả “unlabeled: anomaly-based”
+
+Acceptance Criteria (AC)
+
+Dataset không có label:
+
+mode = unlabeled
+
+metrics = null
+
+UI không hiển thị Accuracy/F1
+
+Dataset có label, mode supervised:
+
+metrics đầy đủ như cũ
+
+Nếu user cố chọn supervised mà không có label:
+
+hệ thống tự fallback sang unlabeled (và trả warning)
+
+COMMIT 2 — Fix LOF scoring: tính đúng cho từng điểm i (không dùng random lofIdx)
+Mục tiêu
+
+Score LOF phải là score của chính điểm i, kể cả khi LOF fit trên sample.
+
+File cần sửa
+
+server/ml-algorithms.ts → runAnomalyDetection()
+
+Patch chi tiết
+1) Hiện trạng cần bỏ
+
+Đang có đoạn kiểu:
+
+Fit LOF trên lofSample
+
+Với i ngoài sampleSize: chọn lofIdx ngẫu nhiên rồi lof.predict([features[lofIdx]])
+
+Sửa:
+
+Fit LOF trên sample
+
+Nhưng predict score cho mọi điểm bằng lof.predict([features[i]])
+
+Pseudo-code
+
+const lofSample = sampleFeatures(features, sampleSize, seed);
+lof.fit(lofSample);
+
+for (let i = 0; i < features.length; i++) {
+  const lofScore = lof.predict([features[i]])[0]; // score đúng point i
+  // normalize & combine
+}
+
+2) Nếu LOF implementation “predict” trả class chứ không trả score
+
+Nếu LOFImplementation.predict() chỉ trả -1/1 thì bạn cần thêm method:
+
+scoreSamples(X): number[] hoặc decisionFunction(X): number[]
+
+Gợi ý tối thiểu:
+
+Nếu bạn có internal LOF “local density ratio” thì trả ra numeric.
+
+Nếu chưa có: LOF chỉ đóng vai trò “vote” thay vì score (nhưng vẫn phải vote theo i).
+
+AC
+
+Không còn logic “i >= sampleSize → pick random index”.
+
+Chạy lại cùng seed → anomalies ổn định.
+
+Top anomalies không còn “nhảy” hoặc “vô lý” do random mapping.
+
+COMMIT 3 — Xử lý “partial labels”: row thiếu label không được ép = 0 trong supervised
+Mục tiêu
+
+Nếu supervised: chỉ dùng những rows có label hợp lệ để train/eval.
+
+Nếu tỷ lệ rows có label quá ít → fallback sang unlabeled hoặc trả warning.
+
+File cần sửa
+
+server/ml-algorithms.ts → extractFeatures()
+
+Patch chi tiết
+1) Thay vì luôn labels.push(0) khi thiếu label
+
+Sửa để:
+
+labels là (number | null)[]
+
+validLabelMask: boolean[]
+
+hasLabel = có ít nhất X% label hợp lệ (ví dụ >= 10% hoặc >= 50 rows)
+
+Pseudo-code
+
+const labels: Array<number|null> = [];
+const validLabelMask: boolean[] = [];
+
+if (labelColExists) {
+  const raw = row[labelCol];
+  const mapped = mapLabel(raw);
+  if (mapped === null) {
+    labels.push(null);
+    validLabelMask.push(false);
+  } else {
+    labels.push(mapped);
+    validLabelMask.push(true);
+  }
+} else {
+  // unlabeled dataset
+}
+
+2) Khi supervised train/eval: filter theo mask
+
+Trước khi split:
+
+const X = [];
+const y = [];
+for (i) if (validLabelMask[i]) { X.push(features[i]); y.push(labels[i] as number); }
+
+3) Rule fallback
+
+Nếu y.length < MIN_LABELED_ROWS (vd 200) → fallback unlabeled hoặc trả warning “label quá ít”.
+
+AC
+
+Dataset có 30% row label, 70% thiếu:
+
+supervised chỉ train trên 30% có label, không “ép 0”
+
+metrics không bị méo
+
+Dataset chỉ có 5 label:
+
+system fallback unlabeled + warning
+
+COMMIT 4 — UI: Ẩn metrics khi unlabeled + hiển thị cảnh báo label thiếu
+File cần sửa
+
+client/src/pages/home.tsx (hoặc component hiển thị kết quả)
+
+Patch
+
+Nếu result.mode === 'unlabeled' hoặc result.metrics == null:
+
+Ẩn bảng Accuracy/Precision/Recall/F1
+
+Hiển thị “Anomaly-based analysis (no ground truth labels)”
+
+Nếu server trả warnings: []:
+
+render warnings (label thiếu, fallback mode, sampling…)
+
+AC
+
+UI không còn hiển thị 100% Accuracy trong unlabeled.
+
+Có banner cảnh báo khi label thiếu hoặc fallback.
+
+COMMIT 5 — Regression tests bổ sung (đảm bảo không quay lại bug)
+File
+
+server/ml-pipeline.test.ts
+
+Test đề xuất
+
+extractFeatures với partial labels → validLabelMask đúng, không ép 0
+
+unlabeled mode → metrics === null
+
+LOF scoring → không phụ thuộc random index, score khác nhau theo input điểm i

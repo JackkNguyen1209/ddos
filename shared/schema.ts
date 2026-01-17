@@ -770,6 +770,8 @@ export const analysisResultSchema = z.object({
   splitInfo: splitInfoSchema.optional(),
   enhancedMetrics: enhancedMetricsSchema.optional(),
   bestHyperparams: z.record(z.any()).optional(),
+  // Warnings (e.g., label fallback, insufficient data)
+  warnings: z.array(z.string()).optional(),
   // Unlabeled mode fields
   unlabeledReport: z.object({
     scoreDistribution: z.object({

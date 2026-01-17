@@ -55,9 +55,25 @@ Run the ML pipeline determinism tests with:
 npx vitest run --root=. server/ml-pipeline.test.ts
 ```
 
-The test suite verifies:
+The test suite (20 tests) verifies:
 - Global seed management (setGlobalSeed/getGlobalSeed)
 - Train/validation/test split reproducibility (makeSplitIndices)
 - K-fold cross-validation fold generation (makeKFolds)
 - Cross-validation result determinism (kFoldCrossValidation)
-- Anomaly detection reproducibility (runAnomalyDetection)
+- Anomaly detection reproducibility with LOF scoring (runAnomalyDetection)
+- Feature extraction with partial labels (extractFeatures)
+- Labeled data filtering (filterLabeledData)
+
+## Recent Changes (January 2026)
+
+### Supervised vs Unlabeled Pipeline Separation
+- **Partial Labels**: Labels array now uses `(number | null)[]` with `validLabelMask` tracking per-row validity
+- **Label Detection Fix**: Properly handles `label=0` as valid value using explicit null/undefined checks
+- **filterLabeledData()**: Helper function extracts only labeled rows for supervised training
+- **analyzeUnlabeled()**: Returns results with `metrics: null` for pure anomaly-based detection
+- **Route Logic**: `/api/analyze` branches to appropriate pipeline based on `trainingData.hasLabel`
+- **Warnings Field**: Added `warnings?: string[]` to AnalysisResult schema for label/data warnings
+
+### ML Pipeline Constants
+- `MIN_LABELED_ROWS = 50`: Minimum labeled rows for supervised mode
+- `MIN_LABELED_RATIO = 0.1`: Minimum label ratio (10%) for supervised mode

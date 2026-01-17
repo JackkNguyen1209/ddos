@@ -122,10 +122,27 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
 
   return (
     <div className="space-y-6">
-      {isUnlabeled && (
-        <Card className="border-blue-500/50 bg-blue-500/5">
+      {/* Show warnings from analysis results (e.g., label fallback) */}
+      {bestModel.warnings && bestModel.warnings.length > 0 && (
+        <Card className="border-amber-500/50 bg-amber-500/5" data-testid="card-warnings">
           <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-blue-700">
+            <CardTitle className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="h-5 w-5" />
+              Cảnh báo
+            </CardTitle>
+            <CardDescription className="space-y-1">
+              {bestModel.warnings.map((warning, idx) => (
+                <p key={idx} className="text-amber-700 dark:text-amber-300">{warning}</p>
+              ))}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+      
+      {isUnlabeled && (
+        <Card className="border-blue-500/50 bg-blue-500/5" data-testid="card-unlabeled-mode">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-blue-700 dark:text-blue-400">
               <Info className="h-5 w-5" />
               Mode: UNLABELED INFERENCE
             </CardTitle>

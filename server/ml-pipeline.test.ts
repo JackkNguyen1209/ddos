@@ -6,6 +6,8 @@ import {
   makeKFolds,
   kFoldCrossValidation,
   runAnomalyDetection,
+  extractFeatures,
+  filterLabeledData,
 } from "./ml-algorithms";
 
 describe("ML Pipeline Determinism", () => {
@@ -134,6 +136,108 @@ describe("ML Pipeline Determinism", () => {
       const result2 = runAnomalyDetection(features, 0.5, "seed-y");
       
       expect(result1.scores).not.toEqual(result2.scores);
+    });
+
+    it("should compute LOF score for each point (not random index)", () => {
+      const features = Array.from({ length: 50 }, (_, i) => 
+        [i % 5, (i * 2) % 7, (i * 3) % 11]
+      );
+      
+      const result1 = runAnomalyDetection(features, 0.5, "lof-test");
+      const result2 = runAnomalyDetection(features, 0.5, "lof-test");
+      
+      expect(result1.scores.length).toBe(features.length);
+      expect(result1.scores).toEqual(result2.scores);
+    });
+  });
+
+  describe("extractFeatures with partial labels", () => {
+    it("should handle full labels correctly", () => {
+      const data = [
+        { feature1: 1, feature2: 2, label: 1 },
+        { feature1: 3, feature2: 4, label: 0 },
+        { feature1: 5, feature2: 6, label: 1 },
+      ];
+      
+      const result = extractFeatures(data, ["feature1", "feature2"]);
+      
+      // 3 rows < MIN_LABELED_ROWS(50) but 100% labeled > MIN_LABELED_RATIO(10%), so hasLabel=true
+      expect(result.hasLabel).toBe(true);
+      expect(result.labeledRowCount).toBe(3);
+      expect(result.validLabelMask).toEqual([true, true, true]);
+      expect(result.labels).toEqual([1, 0, 1]);
+    });
+
+    it("should handle missing labels with null", () => {
+      const data = [
+        { feature1: 1, feature2: 2, label: 1 },
+        { feature1: 3, feature2: 4 },
+        { feature1: 5, feature2: 6, label: 0 },
+      ];
+      
+      const result = extractFeatures(data, ["feature1", "feature2"]);
+      
+      expect(result.labeledRowCount).toBe(2);
+      expect(result.validLabelMask).toEqual([true, false, true]);
+      expect(result.labels).toEqual([1, null, 0]);
+    });
+
+    it("should not force labels to 0 when missing", () => {
+      const data = [
+        { feature1: 1, feature2: 2 },
+        { feature1: 3, feature2: 4 },
+      ];
+      
+      const result = extractFeatures(data, ["feature1", "feature2"]);
+      
+      expect(result.labeledRowCount).toBe(0);
+      expect(result.hasLabel).toBe(false);
+      expect(result.labels).toEqual([null, null]);
+    });
+
+    it("should detect hasLabel=true when sufficient labels", () => {
+      const data = Array.from({ length: 100 }, (_, i) => ({
+        feature1: i,
+        feature2: i * 2,
+        label: i % 2,
+      }));
+      
+      const result = extractFeatures(data, ["feature1", "feature2"]);
+      
+      expect(result.hasLabel).toBe(true);
+      expect(result.labeledRowCount).toBe(100);
+    });
+  });
+
+  describe("filterLabeledData", () => {
+    it("should filter to only labeled rows", () => {
+      const trainingData = {
+        features: [[1, 2], [3, 4], [5, 6]],
+        labels: [1, null, 0] as (number | null)[],
+        validLabelMask: [true, false, true],
+        hasLabel: false,
+        labeledRowCount: 2,
+      };
+      
+      const filtered = filterLabeledData(trainingData);
+      
+      expect(filtered.features).toEqual([[1, 2], [5, 6]]);
+      expect(filtered.labels).toEqual([1, 0]);
+    });
+
+    it("should return empty arrays when no labels", () => {
+      const trainingData = {
+        features: [[1, 2], [3, 4]],
+        labels: [null, null] as (number | null)[],
+        validLabelMask: [false, false],
+        hasLabel: false,
+        labeledRowCount: 0,
+      };
+      
+      const filtered = filterLabeledData(trainingData);
+      
+      expect(filtered.features).toEqual([]);
+      expect(filtered.labels).toEqual([]);
     });
   });
 });

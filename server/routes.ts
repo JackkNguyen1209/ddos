@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import cors from "cors";
 import { storage } from "./storage";
-import { analyzeWithModel, getFeatureColumns, runAnomalyDetection, generateUnlabeledReport, buildFeatureMapping, getFeatureStatistics, analyzeRowForAttack, getCachedResult, setCachedResult, clearCache, getCacheStats, calculateConfusionMatrix, calculateFeatureImportance } from "./ml-algorithms";
+import { analyzeWithModel, analyzeUnlabeled, extractFeatures, getFeatureColumns, runAnomalyDetection, generateUnlabeledReport, buildFeatureMapping, getFeatureStatistics, analyzeRowForAttack, getCachedResult, setCachedResult, clearCache, getCacheStats, calculateConfusionMatrix, calculateFeatureImportance } from "./ml-algorithms";
 import { uploadDatasetSchema, analyzeRequestSchema, type DataRow, type Dataset, type InsertAuditLog } from "@shared/schema";
 import { randomUUID } from "crypto";
 import * as XLSX from "xlsx";
@@ -995,33 +995,57 @@ export async function registerRoutes(
       }
 
       const featureColumns = getFeatureColumns(datasetData.dataset.columns);
-      const mode = datasetData.dataset.mode || "supervised";
+      const requestedMode = datasetData.dataset.mode || "supervised";
+
+      // CRITICAL: Check actual label status to determine effective mode
+      const trainingData = extractFeatures(allRows, featureColumns);
+      const { hasLabel, labeledRowCount } = trainingData;
+      
+      // Determine effective mode: if user requested supervised but no labels, fallback to unlabeled
+      const effectiveMode = (requestedMode === "unlabeled" || !hasLabel) ? "unlabeled" : "supervised";
 
       await storage.clearResults();
 
       const results = [];
+      
+      // ============== UNLABELED MODE: No metrics, anomaly-based only ==============
+      if (effectiveMode === "unlabeled") {
+        const result = await analyzeUnlabeled(
+          datasetId,
+          allRows,
+          featureColumns,
+          datasetData.dataset.columns,
+          { labeledRowCount }
+        );
+        
+        // Add warning if user requested supervised but we fell back to unlabeled
+        if (requestedMode === "supervised" && !hasLabel) {
+          result.warnings.push("Requested supervised mode but dataset has insufficient labels. Falling back to anomaly-based detection.");
+        }
+        
+        await storage.addResult(result as any);
+        results.push(result);
+        
+        // Audit log for analysis
+        logAudit("analyze", "analysis", datasetId, { 
+          modelCount: 1, 
+          models: ["anomaly-ensemble"],
+          mode: effectiveMode,
+          fallback: requestedMode !== effectiveMode
+        }, req);
+
+        return res.json(results);
+      }
+      
+      // ============== SUPERVISED MODE: Full metrics ==============
       for (const modelType of modelTypes) {
         const result = await analyzeWithModel(datasetId, modelType, allRows, featureColumns);
         
-        // Add mode to result
+        // Add mode to result with proper type
         const resultWithMode = {
           ...result,
-          mode,
+          mode: effectiveMode as "supervised" | "unlabeled",
         };
-        
-        // Add unlabeled report if unlabeled mode
-        if (mode === "unlabeled") {
-          const { features } = extractFeaturesForReport(allRows, featureColumns);
-          const normalizedFeatures = normalizeForReport(features);
-          const { scores, alertRate } = runAnomalyDetection(normalizedFeatures);
-          
-          resultWithMode.unlabeledReport = generateUnlabeledReport(
-            allRows,
-            datasetData.dataset.columns,
-            features,
-            scores
-          );
-        }
         
         await storage.addResult(resultWithMode);
         results.push(resultWithMode);
@@ -1031,7 +1055,7 @@ export async function registerRoutes(
       logAudit("analyze", "analysis", datasetId, { 
         modelCount: modelTypes.length, 
         models: modelTypes,
-        mode 
+        mode: effectiveMode 
       }, req);
 
       res.json(results);

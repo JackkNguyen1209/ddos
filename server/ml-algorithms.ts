@@ -32,8 +32,10 @@ function seededShuffle<T>(array: T[], rng: () => number): T[] {
 // ============== ENHANCED TRAINING DATA WITH LABEL DETECTION ==============
 interface TrainingData {
   features: number[][];
-  labels: number[];
-  hasLabel: boolean; // New: indicates if dataset has real labels
+  labels: (number | null)[];  // null for rows without valid labels
+  validLabelMask: boolean[];  // true for rows with valid labels
+  hasLabel: boolean;          // true if dataset has sufficient labels (>=10% or >=50 rows)
+  labeledRowCount: number;    // count of rows with valid labels
 }
 
 // ============== ANALYSIS CACHE ==============
@@ -270,10 +272,15 @@ export function randomSearch(
   };
 }
 
-function extractFeatures(data: DataRow[], featureColumns: string[]): TrainingData {
+// Minimum labeled rows required for supervised mode
+const MIN_LABELED_ROWS = 50;
+const MIN_LABELED_RATIO = 0.1; // 10%
+
+export function extractFeatures(data: DataRow[], featureColumns: string[]): TrainingData {
   const features: number[][] = [];
-  const labels: number[] = [];
-  let hasLabel = false; // Track if any row has a real label
+  const labels: (number | null)[] = [];
+  const validLabelMask: boolean[] = [];
+  let labeledRowCount = 0;
 
   for (const row of data) {
     const featureVector: number[] = [];
@@ -290,22 +297,54 @@ function extractFeatures(data: DataRow[], featureColumns: string[]): TrainingDat
     }
     features.push(featureVector);
 
-    const label = row["label"] || row["Label"] || row["class"] || row["Class"] || row["attack"] || row["Attack"];
-    if (label !== undefined && label !== null && label !== "") {
-      hasLabel = true; // Found at least one real label
+    // Check multiple label column names - use ?? to handle 0 as valid value
+    const labelCols = ["label", "Label", "class", "Class", "attack", "Attack"];
+    let label: string | number | undefined = undefined;
+    for (const col of labelCols) {
+      if (row[col] !== undefined && row[col] !== null && row[col] !== "") {
+        label = row[col] as string | number;
+        break;
+      }
+    }
+    if (label !== undefined) {
+      // Valid label found
+      let mappedLabel: number;
       if (typeof label === "number") {
-        labels.push(label > 0 ? 1 : 0);
+        mappedLabel = label > 0 ? 1 : 0;
       } else {
         const lowerLabel = String(label).toLowerCase();
-        labels.push(lowerLabel.includes("ddos") || lowerLabel.includes("attack") || lowerLabel === "1" ? 1 : 0);
+        mappedLabel = lowerLabel.includes("ddos") || lowerLabel.includes("attack") || lowerLabel === "1" ? 1 : 0;
       }
+      labels.push(mappedLabel);
+      validLabelMask.push(true);
+      labeledRowCount++;
     } else {
-      // No label for this row - push placeholder (will be ignored if hasLabel = false)
-      labels.push(0);
+      // No valid label for this row
+      labels.push(null);
+      validLabelMask.push(false);
     }
   }
 
-  return { features, labels, hasLabel };
+  // Determine if dataset has sufficient labels for supervised mode
+  const labelRatio = data.length > 0 ? labeledRowCount / data.length : 0;
+  const hasLabel = labeledRowCount >= MIN_LABELED_ROWS || labelRatio >= MIN_LABELED_RATIO;
+
+  return { features, labels, validLabelMask, hasLabel, labeledRowCount };
+}
+
+// Helper to filter features/labels to only labeled rows for supervised training
+export function filterLabeledData(trainingData: TrainingData): { features: number[][]; labels: number[] } {
+  const features: number[][] = [];
+  const labels: number[] = [];
+  
+  for (let i = 0; i < trainingData.features.length; i++) {
+    if (trainingData.validLabelMask[i] && trainingData.labels[i] !== null) {
+      features.push(trainingData.features[i]);
+      labels.push(trainingData.labels[i] as number);
+    }
+  }
+  
+  return { features, labels };
 }
 
 class MinMaxScaler {
@@ -1777,7 +1816,11 @@ export async function analyzeWithModel(
     kFolds = 5,
   } = options;
 
-  const { features, labels } = extractFeatures(data, featureColumns);
+  const trainingData = extractFeatures(data, featureColumns);
+  const { features } = trainingData;
+  
+  // CRITICAL: Filter to only labeled rows for supervised training
+  const { features: labeledFeatures, labels: labeledLabels } = filterLabeledData(trainingData);
   
   let crossValidation: CrossValidationResult | undefined;
   let gridSearchResult: GridSearchResult | undefined;
@@ -1790,8 +1833,8 @@ export async function analyzeWithModel(
   let bestHyperparams: Record<string, any> = {};
 
   // Use new ML Best Practices if enabled and data is large enough
-  if (useBestPractices && features.length >= 50) {
-    const enhancedResult = trainModelWithBestPractices(features, labels, modelType, {
+  if (useBestPractices && labeledFeatures.length >= 50) {
+    const enhancedResult = trainModelWithBestPractices(labeledFeatures, labeledLabels, modelType, {
       useCrossValidation,
       useGridSearch,
       kFolds,
@@ -1824,7 +1867,8 @@ export async function analyzeWithModel(
 
     // CRITICAL FIX: Use true labels (not predictions) for feature importance
     // Feature importance measures how features relate to actual classes, not model output
-    const featureImportance = calculateFeatureImportance(allFeaturesScaled, labels, featureColumns);
+    // Use labeledLabels since we trained on labeled data only
+    const featureImportance = calculateFeatureImportance(allFeaturesScaled, labeledLabels, featureColumns);
     const ddosReasons = generateDDoSReasons(allFeaturesScaled, allPredictions, featureColumns, featureImportance);
     const attackTypes = classifyAttackTypes(data, allPredictions, featureColumns);
 
@@ -1898,7 +1942,8 @@ export async function analyzeWithModel(
   }
   
   // FALLBACK: Original approach for small datasets or when best practices disabled
-  const { trainFeatures: rawTrainFeatures, trainLabels, testFeatures: rawTestFeatures, testLabels } = splitData(features, labels);
+  // Use labeledFeatures/labeledLabels for supervised training
+  const { trainFeatures: rawTrainFeatures, trainLabels, testFeatures: rawTestFeatures, testLabels } = splitData(labeledFeatures, labeledLabels);
   
   const scaler = new MinMaxScaler();
   const trainFeatures = scaler.fitTransform(rawTrainFeatures);
@@ -1944,7 +1989,8 @@ export async function analyzeWithModel(
 
   // CRITICAL FIX: Use true labels (not predictions) for feature importance
   // Feature importance measures how features relate to actual classes, not model output
-  const featureImportance = calculateFeatureImportance(allFeaturesScaled, labels, featureColumns);
+  // Use labeledLabels since we trained on labeled data only
+  const featureImportance = calculateFeatureImportance(allFeaturesScaled, labeledLabels, featureColumns);
   const ddosReasons = generateDDoSReasons(allFeaturesScaled, allPredictions, featureColumns, featureImportance);
   
   const attackTypes = classifyAttackTypes(data, allPredictions, featureColumns);
@@ -2510,12 +2556,12 @@ export function runAnomalyDetection(
   const sampleFeatures = features.slice(0, sampleSize);
   lof.fit(sampleFeatures);
   
-  // Combine scores
+  // Combine scores - CRITICAL FIX: LOF score computed for actual point i, not random index
   const scores = isoScores.map((isoScore, i) => {
-    // Normalize LOF để scale tương tự Isolation Forest
-    // CRITICAL FIX: Use seeded RNG and correct index - i points to current feature, not random
-    const lofIdx = i < sampleSize ? i : Math.floor(rng() * sampleSize);
-    const lofScoreNorm = Math.min(1, Math.max(0, (lof.predict([features[lofIdx]])[0] - 1) / 2));
+    // Compute LOF score for the actual point i (not a random sample point)
+    // LOF.predict can handle points not in the training set
+    const lofScore = lof.predict([features[i]])[0];
+    const lofScoreNorm = Math.min(1, Math.max(0, (lofScore - 1) / 2));
     return (isoScore * 0.7 + lofScoreNorm * 0.3);
   });
   
@@ -2577,6 +2623,75 @@ export function generateUnlabeledReport(
         columns.every(col => row[col] !== null && row[col] !== undefined)
       ).length,
     },
+  };
+}
+
+// ============== UNLABELED ANALYSIS (No metrics, anomaly-based only) ==============
+
+export interface UnlabeledAnalysisResult {
+  id: string;
+  datasetId: string;
+  mode: "unlabeled";
+  modelType: "anomaly-ensemble";
+  metrics: null;  // No metrics for unlabeled data
+  ddosDetected: number;
+  normalTraffic: number;
+  analyzedAt: string;
+  analysisTime: number;
+  unlabeledReport: import("@shared/schema").AnalysisResult["unlabeledReport"];
+  warnings: string[];
+}
+
+export async function analyzeUnlabeled(
+  datasetId: string,
+  data: DataRow[],
+  featureColumns: string[],
+  columns: string[],
+  options: { seed?: string; labeledRowCount?: number } = {}
+): Promise<UnlabeledAnalysisResult> {
+  const startTime = Date.now();
+  const { seed, labeledRowCount } = options;
+  
+  // Extract features
+  const trainingData = extractFeatures(data, featureColumns);
+  const { features } = trainingData;
+  
+  // Normalize features for anomaly detection
+  const scaler = new MinMaxScaler();
+  const normalizedFeatures = scaler.fitTransform(features);
+  
+  // Run anomaly detection
+  const anomalyResult = runAnomalyDetection(normalizedFeatures, 0.5, seed);
+  
+  // Count anomalies as DDoS
+  const ddosDetected = anomalyResult.isAnomalous.filter(Boolean).length;
+  const normalTraffic = anomalyResult.isAnomalous.filter(a => !a).length;
+  
+  // Generate unlabeled report
+  const unlabeledReport = generateUnlabeledReport(data, columns, features, anomalyResult.scores);
+  
+  // Generate warnings
+  const warnings: string[] = [];
+  if (labeledRowCount !== undefined && labeledRowCount > 0 && labeledRowCount < 50) {
+    warnings.push(`Dataset has only ${labeledRowCount} labeled rows (minimum 50 required for supervised mode). Using anomaly-based detection.`);
+  } else if (labeledRowCount === 0) {
+    warnings.push("Dataset has no labels. Using anomaly-based detection.");
+  }
+  
+  const analysisTime = (Date.now() - startTime) / 1000;
+  
+  return {
+    id: randomUUID(),
+    datasetId,
+    mode: "unlabeled",
+    modelType: "anomaly-ensemble",
+    metrics: null,
+    ddosDetected,
+    normalTraffic,
+    analyzedAt: new Date().toISOString(),
+    analysisTime,
+    unlabeledReport,
+    warnings,
   };
 }
 
