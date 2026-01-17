@@ -537,6 +537,10 @@ class LUCIDCNN {
   }
   
   train(features: number[][], labels: number[]): void {
+    if (!features || features.length === 0 || !features[0]) {
+      this.initializeKernels(10);
+      return;
+    }
     const numFeatures = features[0].length;
     const matrixRows = Math.max(this.kernelRows + 2, 5);
     const numCols = Math.ceil(numFeatures / matrixRows);
@@ -580,6 +584,9 @@ class LUCIDCNN {
   }
   
   predict(features: number[][]): number[] {
+    if (!features || features.length === 0) {
+      return [];
+    }
     const matrixRows = Math.max(this.kernelRows + 2, 5);
     
     return features.map((f) => {
@@ -590,6 +597,9 @@ class LUCIDCNN {
   }
   
   getAnomalyScores(features: number[][]): number[] {
+    if (!features || features.length === 0) {
+      return [];
+    }
     const matrixRows = Math.max(this.kernelRows + 2, 5);
     
     return features.map((f) => {
