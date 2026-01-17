@@ -68,7 +68,7 @@ export function FileUpload({ onFileSelect, isUploading, uploadProgress }: FileUp
           Upload Dataset
         </CardTitle>
         <CardDescription>
-          Upload file CSV chứa dữ liệu network traffic để phân tích DDoS
+          Upload file CSV hoặc Excel (.xlsx) chứa dữ liệu network traffic để phân tích DDoS
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -87,7 +87,7 @@ export function FileUpload({ onFileSelect, isUploading, uploadProgress }: FileUp
           >
             <input
               type="file"
-              accept=".csv,.txt,text/csv,text/plain,application/csv"
+              accept=".csv,.xlsx,.xls,.txt,text/csv,text/plain,application/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               onChange={handleFileChange}
               className="absolute inset-0 cursor-pointer opacity-0"
               data-testid="input-file-upload"
@@ -98,14 +98,14 @@ export function FileUpload({ onFileSelect, isUploading, uploadProgress }: FileUp
               </div>
               <div className="space-y-1">
                 <p className="text-sm font-medium">
-                  Kéo thả file CSV vào đây
+                  Kéo thả file CSV hoặc Excel vào đây
                 </p>
                 <p className="text-xs text-muted-foreground">
                   hoặc click để chọn file
                 </p>
               </div>
               <p className="text-xs text-muted-foreground mt-2">
-                Hỗ trợ file CSV với các cột như: src_ip, dst_ip, protocol, bytes, packets, duration, label...
+                Hỗ trợ file CSV, Excel (.xlsx) với các cột như: src_ip, dst_ip, protocol, bytes, packets, duration, label...
               </p>
             </div>
           </div>

@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { analyzeWithModel, getFeatureColumns } from "./ml-algorithms";
 import { uploadDatasetSchema, analyzeRequestSchema, type DataRow, type Dataset } from "@shared/schema";
 import { randomUUID } from "crypto";
+import * as XLSX from "xlsx";
 
 function parseCSVLine(line: string): string[] {
   const result: string[] = [];
@@ -51,6 +52,59 @@ function parseCSV(csvContent: string): { columns: string[]; rows: DataRow[] } {
   }
 
   return { columns, rows };
+}
+
+function isXlsxContent(content: string): boolean {
+  return content.startsWith("PK") || content.includes("xl/worksheets");
+}
+
+function parseXlsx(base64Content: string): { columns: string[]; rows: DataRow[] } {
+  try {
+    const binaryStr = atob(base64Content);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    
+    const workbook = XLSX.read(bytes, { type: "array" });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    
+    const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: "" });
+    
+    if (jsonData.length === 0) {
+      return { columns: [], rows: [] };
+    }
+    
+    const columns = Object.keys(jsonData[0]);
+    const rows: DataRow[] = jsonData.map((row) => {
+      const dataRow: DataRow = {};
+      for (const col of columns) {
+        const value = row[col];
+        if (typeof value === "number") {
+          dataRow[col] = value;
+        } else if (typeof value === "string") {
+          const numValue = parseFloat(value);
+          dataRow[col] = isNaN(numValue) ? value : numValue;
+        } else {
+          dataRow[col] = value?.toString() || "";
+        }
+      }
+      return dataRow;
+    });
+    
+    return { columns, rows };
+  } catch (error) {
+    console.error("Error parsing xlsx:", error);
+    return { columns: [], rows: [] };
+  }
+}
+
+function parseDataContent(content: string, filename: string): { columns: string[]; rows: DataRow[] } {
+  if (filename.endsWith(".xlsx") || filename.endsWith(".xls") || isXlsxContent(content)) {
+    return parseXlsx(content);
+  }
+  return parseCSV(content);
 }
 
 function hasLabelColumn(columns: string[]): boolean {
@@ -132,10 +186,10 @@ export async function registerRoutes(
       }
 
       const { name, data } = parsed.data;
-      const { columns, rows } = parseCSV(data);
+      const { columns, rows } = parseDataContent(data, name);
 
       if (rows.length === 0) {
-        return res.status(400).json({ error: "No data found in CSV" });
+        return res.status(400).json({ error: "Không tìm thấy dữ liệu trong file. Hãy đảm bảo file có định dạng CSV hoặc Excel (.xlsx) hợp lệ." });
       }
 
       const { cleanedRows, missingValues, duplicates, outliers } = cleanData(rows, columns);

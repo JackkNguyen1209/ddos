@@ -31,9 +31,23 @@ export default function Home() {
 
   const uploadMutation = useMutation({
     mutationFn: async ({ file, name }: { file: File; name: string }) => {
-      const text = await file.text();
+      let data: string;
+      const isExcel = file.name.endsWith(".xlsx") || file.name.endsWith(".xls");
+      
+      if (isExcel) {
+        const arrayBuffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        data = btoa(binary);
+      } else {
+        data = await file.text();
+      }
+      
       setUploadProgress(30);
-      const response = await apiRequest("POST", "/api/upload", { name, data: text });
+      const response = await apiRequest("POST", "/api/upload", { name, data });
       setUploadProgress(100);
       return response.json();
     },
