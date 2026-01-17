@@ -1,4 +1,4 @@
-import type { DataRow, MLModelType, AnalysisResult, FeatureImportance, DDoSReason } from "@shared/schema";
+import type { DataRow, MLModelType, AnalysisResult, FeatureImportance, DDoSReason, AttackTypeResult, DDoSAttackType } from "@shared/schema";
 import { randomUUID } from "crypto";
 
 interface TrainingData {
@@ -410,6 +410,263 @@ class LogisticRegression {
   }
 }
 
+class LUCIDCNN {
+  private kernels: number[][][] = [];
+  private fcWeights: number[] = [];
+  private fcBias: number = 0;
+  private numKernels: number;
+  private kernelRows: number;
+  private learningRate: number;
+  private epochs: number;
+  
+  constructor(numKernels: number = 64, kernelRows: number = 3, learningRate: number = 0.01, epochs: number = 50) {
+    this.numKernels = numKernels;
+    this.kernelRows = kernelRows;
+    this.learningRate = learningRate;
+    this.epochs = epochs;
+  }
+  
+  private relu(x: number): number {
+    return Math.max(0, x);
+  }
+  
+  private sigmoid(x: number): number {
+    return 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x))));
+  }
+  
+  private initializeKernels(numFeatures: number): void {
+    this.kernels = [];
+    for (let k = 0; k < this.numKernels; k++) {
+      const kernel: number[][] = [];
+      for (let i = 0; i < this.kernelRows; i++) {
+        const row: number[] = [];
+        for (let j = 0; j < numFeatures; j++) {
+          row.push((Math.random() - 0.5) * 0.1);
+        }
+        kernel.push(row);
+      }
+      this.kernels.push(kernel);
+    }
+    
+    this.fcWeights = new Array(this.numKernels).fill(0).map(() => (Math.random() - 0.5) * 0.1);
+    this.fcBias = 0;
+  }
+  
+  private conv2d(input: number[][], kernel: number[][]): number[] {
+    const outputSize = input.length - kernel.length + 1;
+    const output: number[] = [];
+    
+    for (let i = 0; i < outputSize; i++) {
+      let sum = 0;
+      for (let kr = 0; kr < kernel.length; kr++) {
+        for (let kc = 0; kc < kernel[0].length; kc++) {
+          sum += input[i + kr][kc] * kernel[kr][kc];
+        }
+      }
+      output.push(this.relu(sum));
+    }
+    
+    return output;
+  }
+  
+  private maxPool(input: number[]): number {
+    return Math.max(...input, 0);
+  }
+  
+  private forward(features: number[][]): { pooled: number[]; prediction: number } {
+    const pooled: number[] = [];
+    
+    for (const kernel of this.kernels) {
+      const convOutput = this.conv2d(features, kernel);
+      const maxVal = this.maxPool(convOutput);
+      pooled.push(maxVal);
+    }
+    
+    const z = pooled.reduce((sum, val, i) => sum + val * this.fcWeights[i], 0) + this.fcBias;
+    const prediction = this.sigmoid(z);
+    
+    return { pooled, prediction };
+  }
+  
+  private reshapeToMatrix(features: number[], numRows: number): number[][] {
+    const numCols = Math.ceil(features.length / numRows);
+    const matrix: number[][] = [];
+    
+    for (let i = 0; i < numRows; i++) {
+      const row: number[] = [];
+      for (let j = 0; j < numCols; j++) {
+        const idx = i * numCols + j;
+        row.push(idx < features.length ? features[idx] : 0);
+      }
+      matrix.push(row);
+    }
+    
+    return matrix;
+  }
+  
+  train(features: number[][], labels: number[]): void {
+    const numFeatures = features[0].length;
+    const matrixRows = Math.max(this.kernelRows + 2, 5);
+    
+    this.initializeKernels(Math.ceil(numFeatures / matrixRows));
+    
+    for (let epoch = 0; epoch < this.epochs; epoch++) {
+      for (let i = 0; i < features.length; i++) {
+        const matrix = this.reshapeToMatrix(features[i], matrixRows);
+        const { pooled, prediction } = this.forward(matrix);
+        
+        const error = prediction - labels[i];
+        
+        for (let j = 0; j < this.fcWeights.length; j++) {
+          this.fcWeights[j] -= this.learningRate * error * pooled[j];
+        }
+        this.fcBias -= this.learningRate * error;
+      }
+    }
+  }
+  
+  predict(features: number[][]): number[] {
+    const matrixRows = Math.max(this.kernelRows + 2, 5);
+    
+    return features.map((f) => {
+      const matrix = this.reshapeToMatrix(f, matrixRows);
+      const { prediction } = this.forward(matrix);
+      return prediction >= 0.5 ? 1 : 0;
+    });
+  }
+  
+  getAnomalyScores(features: number[][]): number[] {
+    const matrixRows = Math.max(this.kernelRows + 2, 5);
+    
+    return features.map((f) => {
+      const matrix = this.reshapeToMatrix(f, matrixRows);
+      const { prediction } = this.forward(matrix);
+      return prediction;
+    });
+  }
+}
+
+function classifyAttackTypes(
+  data: DataRow[],
+  predictions: number[],
+  featureColumns: string[]
+): AttackTypeResult[] {
+  const attackCounts: Record<DDoSAttackType, { count: number; indicators: Set<string>; confidence: number }> = {
+    port_scan: { count: 0, indicators: new Set(), confidence: 0 },
+    syn_flood: { count: 0, indicators: new Set(), confidence: 0 },
+    udp_flood: { count: 0, indicators: new Set(), confidence: 0 },
+    icmp_flood: { count: 0, indicators: new Set(), confidence: 0 },
+    http_flood: { count: 0, indicators: new Set(), confidence: 0 },
+    dns_amplification: { count: 0, indicators: new Set(), confidence: 0 },
+    ntp_amplification: { count: 0, indicators: new Set(), confidence: 0 },
+    ldap_reflection: { count: 0, indicators: new Set(), confidence: 0 },
+    rdp_attack: { count: 0, indicators: new Set(), confidence: 0 },
+    ssdp_amplification: { count: 0, indicators: new Set(), confidence: 0 },
+    memcached_amplification: { count: 0, indicators: new Set(), confidence: 0 },
+    unknown: { count: 0, indicators: new Set(), confidence: 0 },
+  };
+
+  const portCol = featureColumns.find(c => c.toLowerCase().includes("dst_port") || c.toLowerCase().includes("dstport") || c.toLowerCase().includes("destination_port"));
+  const srcPortCol = featureColumns.find(c => c.toLowerCase().includes("src_port") || c.toLowerCase().includes("srcport") || c.toLowerCase().includes("source_port"));
+  const protocolCol = featureColumns.find(c => c.toLowerCase().includes("protocol") || c.toLowerCase() === "proto");
+  const bytesCol = featureColumns.find(c => c.toLowerCase().includes("bytes") || c.toLowerCase().includes("length"));
+  const packetsCol = featureColumns.find(c => c.toLowerCase().includes("packets") || c.toLowerCase().includes("pkts"));
+  const durationCol = featureColumns.find(c => c.toLowerCase().includes("duration") || c.toLowerCase().includes("time"));
+  const flagsCol = featureColumns.find(c => c.toLowerCase().includes("flag") || c.toLowerCase().includes("tcp_flags"));
+
+  for (let i = 0; i < data.length; i++) {
+    if (predictions[i] !== 1) continue;
+    
+    const row = data[i];
+    let attackType: DDoSAttackType = "unknown";
+    let confidence = 0.5;
+    const indicators: string[] = [];
+
+    const dstPort = portCol ? Number(row[portCol]) || 0 : 0;
+    const srcPort = srcPortCol ? Number(row[srcPortCol]) || 0 : 0;
+    const protocol = protocolCol ? String(row[protocolCol]).toLowerCase() : "";
+    const bytes = bytesCol ? Number(row[bytesCol]) || 0 : 0;
+    const packets = packetsCol ? Number(row[packetsCol]) || 0 : 0;
+    const duration = durationCol ? Number(row[durationCol]) || 0 : 0;
+    const flags = flagsCol ? String(row[flagsCol]).toUpperCase() : "";
+
+    if (dstPort === 3389) {
+      attackType = "rdp_attack";
+      confidence = 0.85;
+      indicators.push("Cổng RDP 3389");
+      if (duration < 1) indicators.push("Kết nối ngắn");
+    } else if (dstPort === 389 || dstPort === 636 || dstPort === 3268) {
+      attackType = "ldap_reflection";
+      confidence = 0.9;
+      indicators.push(`Cổng LDAP ${dstPort}`);
+      if (protocol.includes("udp")) indicators.push("Giao thức UDP");
+    } else if (dstPort === 53) {
+      attackType = "dns_amplification";
+      confidence = 0.8;
+      indicators.push("Cổng DNS 53");
+      if (bytes > 512) indicators.push("Response size lớn");
+    } else if (dstPort === 123) {
+      attackType = "ntp_amplification";
+      confidence = 0.85;
+      indicators.push("Cổng NTP 123");
+    } else if (dstPort === 1900) {
+      attackType = "ssdp_amplification";
+      confidence = 0.85;
+      indicators.push("Cổng SSDP 1900");
+    } else if (dstPort === 11211) {
+      attackType = "memcached_amplification";
+      confidence = 0.9;
+      indicators.push("Cổng Memcached 11211");
+    } else if (dstPort === 80 || dstPort === 443 || dstPort === 8080) {
+      if (flags.includes("S") && !flags.includes("A")) {
+        attackType = "syn_flood";
+        confidence = 0.85;
+        indicators.push("SYN flag without ACK");
+      } else {
+        attackType = "http_flood";
+        confidence = 0.75;
+      }
+      indicators.push(`Cổng HTTP ${dstPort}`);
+    } else if (protocol.includes("udp") || protocol === "17") {
+      attackType = "udp_flood";
+      confidence = 0.7;
+      indicators.push("Giao thức UDP");
+      if (packets > 100) indicators.push("Số packet cao");
+    } else if (protocol.includes("icmp") || protocol === "1") {
+      attackType = "icmp_flood";
+      confidence = 0.8;
+      indicators.push("Giao thức ICMP");
+    } else if (flags.includes("S") && !flags.includes("A")) {
+      attackType = "syn_flood";
+      confidence = 0.8;
+      indicators.push("SYN flag cao");
+    }
+
+    if (indicators.length === 0 && attackType === "unknown") {
+      indicators.push("Pattern bất thường");
+    }
+
+    attackCounts[attackType].count++;
+    attackCounts[attackType].confidence = Math.max(attackCounts[attackType].confidence, confidence);
+    indicators.forEach(ind => attackCounts[attackType].indicators.add(ind));
+  }
+
+  const totalDDoS = predictions.filter(p => p === 1).length;
+  
+  const results: AttackTypeResult[] = Object.entries(attackCounts)
+    .filter(([_, data]) => data.count > 0)
+    .map(([type, data]) => ({
+      type: type as DDoSAttackType,
+      count: data.count,
+      percentage: totalDDoS > 0 ? (data.count / totalDDoS) * 100 : 0,
+      confidence: data.confidence,
+      indicators: Array.from(data.indicators),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return results;
+}
+
 export async function analyzeWithModel(
   datasetId: string,
   modelType: MLModelType,
@@ -423,6 +680,8 @@ export async function analyzeWithModel(
   const { trainFeatures, trainLabels, testFeatures, testLabels } = splitData(normalizedFeatures, labels);
 
   let model: any;
+  let lucidModel: LUCIDCNN | null = null;
+  
   switch (modelType) {
     case "decision_tree":
       model = new DecisionTree(10);
@@ -438,6 +697,10 @@ export async function analyzeWithModel(
       break;
     case "logistic_regression":
       model = new LogisticRegression(0.1, 200);
+      break;
+    case "lucid_cnn":
+      lucidModel = new LUCIDCNN(32, 3, 0.01, 30);
+      model = lucidModel;
       break;
     default:
       throw new Error(`Unknown model type: ${modelType}`);
@@ -455,6 +718,23 @@ export async function analyzeWithModel(
 
   const featureImportance = calculateFeatureImportance(normalizedFeatures, allPredictions, featureColumns);
   const ddosReasons = generateDDoSReasons(normalizedFeatures, allPredictions, featureColumns, featureImportance);
+  
+  const attackTypes = classifyAttackTypes(data, allPredictions, featureColumns);
+  
+  let lucidAnalysis = undefined;
+  if (modelType === "lucid_cnn" && lucidModel) {
+    const anomalyScores = lucidModel.getAnomalyScores(normalizedFeatures);
+    const avgAnomalyScore = anomalyScores.reduce((a, b) => a + b, 0) / anomalyScores.length;
+    
+    lucidAnalysis = {
+      cnnLayers: 1,
+      kernelSize: 3,
+      timeWindow: 10,
+      flowFeatures: featureColumns.length,
+      anomalyScore: avgAnomalyScore,
+      confidence: metrics.f1Score,
+    };
+  }
 
   return {
     id: randomUUID(),
@@ -471,6 +751,8 @@ export async function analyzeWithModel(
     analyzedAt: new Date().toISOString(),
     featureImportance,
     ddosReasons,
+    attackTypes,
+    lucidAnalysis,
   };
 }
 
