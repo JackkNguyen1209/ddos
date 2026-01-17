@@ -1,4 +1,4 @@
-import type { DataRow, MLModelType, AnalysisResult } from "@shared/schema";
+import type { DataRow, MLModelType, AnalysisResult, FeatureImportance, DDoSReason } from "@shared/schema";
 import { randomUUID } from "crypto";
 
 interface TrainingData {
@@ -453,6 +453,9 @@ export async function analyzeWithModel(
 
   const trainingTime = (Date.now() - startTime) / 1000;
 
+  const featureImportance = calculateFeatureImportance(normalizedFeatures, allPredictions, featureColumns);
+  const ddosReasons = generateDDoSReasons(normalizedFeatures, allPredictions, featureColumns, featureImportance);
+
   return {
     id: randomUUID(),
     datasetId,
@@ -466,6 +469,8 @@ export async function analyzeWithModel(
     ddosDetected,
     normalTraffic,
     analyzedAt: new Date().toISOString(),
+    featureImportance,
+    ddosReasons,
   };
 }
 
@@ -478,4 +483,106 @@ export function getFeatureColumns(columns: string[]): string[] {
       !labelColumns.includes(col) &&
       !idColumns.includes(col)
   );
+}
+
+const FEATURE_DESCRIPTIONS: Record<string, string> = {
+  bytes: "Lượng dữ liệu (bytes) cao bất thường có thể chỉ ra tấn công volumetric",
+  packets: "Số lượng gói tin lớn trong thời gian ngắn là dấu hiệu của DDoS flood",
+  duration: "Thời lượng kết nối ngắn bất thường là đặc điểm của SYN flood",
+  src_ip: "Nhiều địa chỉ IP nguồn khác nhau có thể là botnet phân tán",
+  dst_ip: "Tập trung vào một IP đích là mục tiêu của cuộc tấn công",
+  protocol: "Giao thức bất thường (UDP flood, ICMP flood) thường dùng trong DDoS",
+  src_port: "Các cổng nguồn ngẫu nhiên là đặc điểm của IP spoofing",
+  dst_port: "Tập trung vào cổng cụ thể (80, 443, 53) là mục tiêu tấn công",
+  flags: "Cờ TCP bất thường (SYN flood, ACK flood) là dấu hiệu tấn công",
+  flow_duration: "Luồng dữ liệu ngắn lặp lại nhiều lần là đặc điểm botnet",
+  total_fwd_packets: "Số gói chuyển tiếp cao bất thường chỉ ra traffic flood",
+  total_bwd_packets: "Số gói phản hồi thấp bất thường chỉ ra tấn công một chiều",
+  flow_bytes_per_s: "Tốc độ bytes/giây cao là dấu hiệu tấn công bandwidth",
+  flow_packets_per_s: "Tốc độ gói/giây cao là dấu hiệu flood attack",
+  avg_packet_size: "Kích thước gói tin nhỏ đồng đều là đặc điểm SYN flood",
+  default: "Đặc trưng mạng bất thường đóng góp vào phát hiện DDoS",
+};
+
+function getFeatureDescription(feature: string): string {
+  const lowerFeature = feature.toLowerCase();
+  for (const [key, desc] of Object.entries(FEATURE_DESCRIPTIONS)) {
+    if (lowerFeature.includes(key)) {
+      return desc;
+    }
+  }
+  return FEATURE_DESCRIPTIONS.default;
+}
+
+function calculateFeatureImportance(
+  features: number[][],
+  labels: number[],
+  featureColumns: string[]
+): FeatureImportance[] {
+  const importances: FeatureImportance[] = [];
+  
+  for (let i = 0; i < featureColumns.length; i++) {
+    const featureValues = features.map((f) => f[i]);
+    
+    const ddosValues = featureValues.filter((_, idx) => labels[idx] === 1);
+    const normalValues = featureValues.filter((_, idx) => labels[idx] === 0);
+    
+    const ddosMean = ddosValues.length > 0 ? ddosValues.reduce((a, b) => a + b, 0) / ddosValues.length : 0;
+    const normalMean = normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : 0;
+    
+    const ddosVar = ddosValues.length > 0 
+      ? ddosValues.reduce((sum, v) => sum + Math.pow(v - ddosMean, 2), 0) / ddosValues.length 
+      : 1;
+    const normalVar = normalValues.length > 0 
+      ? normalValues.reduce((sum, v) => sum + Math.pow(v - normalMean, 2), 0) / normalValues.length 
+      : 1;
+    
+    const pooledStd = Math.sqrt((ddosVar + normalVar) / 2) || 1;
+    const importance = Math.abs(ddosMean - normalMean) / pooledStd;
+    
+    importances.push({
+      feature: featureColumns[i],
+      importance: Math.min(importance, 1),
+      description: getFeatureDescription(featureColumns[i]),
+    });
+  }
+  
+  return importances.sort((a, b) => b.importance - a.importance).slice(0, 10);
+}
+
+function generateDDoSReasons(
+  features: number[][],
+  labels: number[],
+  featureColumns: string[],
+  featureImportance: FeatureImportance[]
+): DDoSReason[] {
+  const reasons: DDoSReason[] = [];
+  
+  const ddosIndices = labels.map((l, i) => l === 1 ? i : -1).filter((i) => i !== -1);
+  const normalIndices = labels.map((l, i) => l === 0 ? i : -1).filter((i) => i !== -1);
+  
+  const topFeatures = featureImportance.slice(0, 5);
+  
+  for (const fi of topFeatures) {
+    const featureIdx = featureColumns.indexOf(fi.feature);
+    if (featureIdx === -1) continue;
+    
+    const ddosValues = ddosIndices.map((i) => features[i][featureIdx]);
+    const normalValues = normalIndices.map((i) => features[i][featureIdx]);
+    
+    const ddosMean = ddosValues.length > 0 ? ddosValues.reduce((a, b) => a + b, 0) / ddosValues.length : 0;
+    const normalMean = normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : 0;
+    
+    const threshold = (ddosMean + normalMean) / 2;
+    
+    reasons.push({
+      feature: fi.feature,
+      value: ddosMean,
+      threshold: threshold,
+      contribution: fi.importance,
+      description: fi.description,
+    });
+  }
+  
+  return reasons;
 }

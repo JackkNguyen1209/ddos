@@ -1,4 +1,4 @@
-import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle } from "lucide-react";
+import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle, Info, Zap } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -144,9 +144,10 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="comparison" className="w-full">
-            <TabsList className="grid w-full grid-cols-3 mb-6">
+            <TabsList className="grid w-full grid-cols-4 mb-6">
               <TabsTrigger value="comparison" data-testid="tab-comparison">So sánh</TabsTrigger>
               <TabsTrigger value="radar" data-testid="tab-radar">Radar Chart</TabsTrigger>
+              <TabsTrigger value="explanation" data-testid="tab-explanation">Giải thích</TabsTrigger>
               <TabsTrigger value="details" data-testid="tab-details">Chi tiết</TabsTrigger>
             </TabsList>
 
@@ -202,6 +203,10 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
                   </RadarChart>
                 </ResponsiveContainer>
               </div>
+            </TabsContent>
+
+            <TabsContent value="explanation" className="space-y-6">
+              <DDoSExplanation result={bestModel} getModelName={getModelName} />
             </TabsContent>
 
             <TabsContent value="details" className="space-y-4">
@@ -359,5 +364,130 @@ function ModelDetailCard({ result, rank, getModelName }: ModelDetailCardProps) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+interface DDoSExplanationProps {
+  result: AnalysisResult;
+  getModelName: (type: string) => string;
+}
+
+function DDoSExplanation({ result, getModelName }: DDoSExplanationProps) {
+  const featureImportance = result.featureImportance || [];
+  const ddosReasons = result.ddosReasons || [];
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Info className="h-5 w-5 text-primary" />
+            Tại Sao Được Phân Loại Là DDoS?
+          </CardTitle>
+          <CardDescription>
+            Giải thích chi tiết các đặc trưng khiến traffic được mô hình {getModelName(result.modelType)} phân loại là tấn công DDoS (dựa trên kết quả dự đoán của mô hình)
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {ddosReasons.length > 0 ? (
+            <div className="space-y-3">
+              {ddosReasons.map((reason, idx) => (
+                <div key={idx} className="rounded-lg border p-4 space-y-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-chart-3" />
+                      <span className="font-semibold">{reason.feature}</span>
+                    </div>
+                    <Badge variant="outline" className="text-xs">
+                      Mức đóng góp: {(reason.contribution * 100).toFixed(1)}%
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{reason.description}</p>
+                  <div className="flex items-center gap-4 text-xs">
+                    <span className="text-destructive">
+                      Giá trị DDoS: {reason.value.toFixed(2)}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Ngưỡng: {reason.threshold.toFixed(2)}
+                    </span>
+                  </div>
+                  <Progress value={reason.contribution * 100} className="h-1.5" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-4 space-y-2">
+              <AlertTriangle className="h-8 w-8 text-muted-foreground mx-auto" />
+              <p className="text-muted-foreground">
+                Không có dữ liệu giải thích. Mô hình không phát hiện đủ mẫu DDoS để phân tích hoặc dataset không có cột nhãn (label).
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <BarChart3 className="h-5 w-5 text-primary" />
+            Mức Độ Quan Trọng Của Đặc Trưng
+          </CardTitle>
+          <CardDescription>
+            Các đặc trưng ảnh hưởng nhiều nhất đến việc phát hiện DDoS
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {featureImportance.length > 0 ? (
+            <div className="space-y-3">
+              {featureImportance.map((fi, idx) => (
+                <div key={idx} className="space-y-1.5">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">{fi.feature}</span>
+                    <span className="text-muted-foreground">
+                      {(fi.importance * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <Progress value={fi.importance * 100} className="h-2" />
+                  <p className="text-xs text-muted-foreground">{fi.description}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-center py-4">
+              Không có dữ liệu về mức độ quan trọng của đặc trưng.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="bg-accent/30">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <AlertTriangle className="h-5 w-5 text-chart-3" />
+            Tổng Kết Phân Tích
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <p>
+              Mô hình <strong>{getModelName(result.modelType)}</strong> đã phát hiện{" "}
+              <span className="text-destructive font-bold">{result.ddosDetected.toLocaleString()}</span> mẫu traffic là tấn công DDoS
+              và <span className="text-chart-2 font-bold">{result.normalTraffic.toLocaleString()}</span> mẫu là traffic bình thường.
+            </p>
+            <p className="mt-2">
+              Với độ chính xác <strong>{(result.accuracy * 100).toFixed(1)}%</strong>, mô hình đã xác định các đặc trưng 
+              quan trọng nhất để phân biệt giữa traffic DDoS và traffic bình thường.
+            </p>
+            {ddosReasons.length > 0 && (
+              <p className="mt-2">
+                Đặc trưng <strong>{ddosReasons[0]?.feature}</strong> có mức đóng góp cao nhất 
+                ({(ddosReasons[0]?.contribution * 100).toFixed(1)}%) trong việc phát hiện tấn công. 
+                {ddosReasons[0]?.description}
+              </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

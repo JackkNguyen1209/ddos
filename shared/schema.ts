@@ -38,6 +38,26 @@ export const mlModelSchema = z.object({
 
 export type MLModel = z.infer<typeof mlModelSchema>;
 
+// DDoS detection reasons
+export const ddosReasonSchema = z.object({
+  feature: z.string(),
+  value: z.number(),
+  threshold: z.number(),
+  contribution: z.number(),
+  description: z.string(),
+});
+
+export type DDoSReason = z.infer<typeof ddosReasonSchema>;
+
+// Feature importance for explanations
+export const featureImportanceSchema = z.object({
+  feature: z.string(),
+  importance: z.number(),
+  description: z.string(),
+});
+
+export type FeatureImportance = z.infer<typeof featureImportanceSchema>;
+
 // Analysis result schema
 export const analysisResultSchema = z.object({
   id: z.string(),
@@ -57,6 +77,8 @@ export const analysisResultSchema = z.object({
   ddosDetected: z.number(),
   normalTraffic: z.number(),
   analyzedAt: z.string(),
+  featureImportance: z.array(featureImportanceSchema).optional(),
+  ddosReasons: z.array(ddosReasonSchema).optional(),
 });
 
 export type AnalysisResult = z.infer<typeof analysisResultSchema>;
