@@ -5,6 +5,7 @@ import { analyzeWithModel, getFeatureColumns, runAnomalyDetection, generateUnlab
 import { uploadDatasetSchema, analyzeRequestSchema, type DataRow, type Dataset } from "@shared/schema";
 import { randomUUID } from "crypto";
 import * as XLSX from "xlsx";
+import { learningService } from "./learning-service";
 
 // Helper function to extract features for report
 function extractFeaturesForReport(data: DataRow[], featureColumns: string[]): { features: number[][] } {
@@ -527,6 +528,183 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Analysis error:", error);
       res.status(500).json({ error: "Failed to analyze dataset" });
+    }
+  });
+
+  // ============== LEARNING ENDPOINTS ==============
+  
+  // Get learning statistics
+  app.get("/api/learning/stats", async (req, res) => {
+    try {
+      const stats = await learningService.getLearningStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Learning stats error:", error);
+      res.status(500).json({ error: "Failed to get learning stats" });
+    }
+  });
+  
+  // Get learned patterns
+  app.get("/api/learning/patterns", async (req, res) => {
+    try {
+      const patterns = await learningService.getLearnedPatterns();
+      res.json(patterns);
+    } catch (error) {
+      console.error("Learning patterns error:", error);
+      res.status(500).json({ error: "Failed to get learned patterns" });
+    }
+  });
+  
+  // Learn from current analysis results
+  app.post("/api/learning/learn", async (req, res) => {
+    try {
+      const datasetData = await storage.getDataset();
+      if (!datasetData) {
+        return res.status(404).json({ error: "No dataset available" });
+      }
+      
+      const allRows: DataRow[] = (global as any).__datasetRows || [];
+      if (allRows.length === 0) {
+        return res.status(400).json({ error: "No data available to learn from" });
+      }
+      
+      const featureColumns = getFeatureColumns(datasetData.dataset.columns);
+      
+      // Get labels from the most recent analysis or generate from anomaly detection
+      const results = await storage.getResults();
+      let labels: number[] = [];
+      let attackTypes: string[] = [];
+      
+      if (results.length > 0) {
+        // Use predictions from the best performing model
+        const bestResult = results.sort((a, b) => (b.f1Score || 0) - (a.f1Score || 0))[0];
+        
+        // Generate labels based on anomaly detection if no supervised results
+        const { features } = extractFeaturesForReport(allRows, featureColumns);
+        const normalizedFeatures = normalizeForReport(features);
+        const { scores } = runAnomalyDetection(normalizedFeatures);
+        
+        labels = scores.map(s => s > 0.5 ? 1 : 0);
+        
+        // Get attack types from classification
+        const attackClassification = bestResult.attackTypes || [];
+        for (let i = 0; i < allRows.length; i++) {
+          if (labels[i] === 1 && attackClassification.length > 0) {
+            attackTypes.push(attackClassification[0]?.attackType || "unknown");
+          } else {
+            attackTypes.push("normal");
+          }
+        }
+      } else {
+        // No analysis results, use anomaly detection
+        const { features } = extractFeaturesForReport(allRows, featureColumns);
+        const normalizedFeatures = normalizeForReport(features);
+        const { scores } = runAnomalyDetection(normalizedFeatures);
+        labels = scores.map(s => s > 0.5 ? 1 : 0);
+        attackTypes = labels.map(l => l === 1 ? "unknown_ddos" : "normal");
+      }
+      
+      const result = await learningService.addTrainingSamples(
+        allRows,
+        labels,
+        featureColumns,
+        datasetData.dataset.name,
+        attackTypes
+      );
+      
+      // Record model performance if we have analysis results
+      if (results.length > 0) {
+        for (const r of results) {
+          await learningService.recordModelPerformance(
+            r.modelType,
+            r.accuracy,
+            r.precision,
+            r.recall,
+            r.f1Score
+          );
+        }
+      }
+      
+      res.json({
+        success: true,
+        ...result,
+        message: `Đã học từ ${result.samplesAdded} mẫu (${result.ddosSamplesAdded} DDoS, ${result.normalSamplesAdded} Normal). Phát hiện ${result.patternsLearned} patterns mới.`
+      });
+    } catch (error) {
+      console.error("Learning error:", error);
+      res.status(500).json({ error: "Failed to learn from data" });
+    }
+  });
+  
+  // Analyze using learned patterns
+  app.post("/api/learning/analyze-with-patterns", async (req, res) => {
+    try {
+      const datasetData = await storage.getDataset();
+      if (!datasetData) {
+        return res.status(404).json({ error: "No dataset available" });
+      }
+      
+      const allRows: DataRow[] = (global as any).__datasetRows || [];
+      if (allRows.length === 0) {
+        return res.status(400).json({ error: "No data available" });
+      }
+      
+      const featureColumns = getFeatureColumns(datasetData.dataset.columns);
+      
+      // Analyze each row against learned patterns
+      const results: { rowIndex: number; matchedPattern: string | null; confidence: number; isAttack: boolean }[] = [];
+      let attackCount = 0;
+      
+      for (let i = 0; i < Math.min(allRows.length, 1000); i++) {
+        const row = allRows[i];
+        const features: number[] = [];
+        
+        for (const col of featureColumns) {
+          const val = row[col];
+          features.push(typeof val === "number" ? val : parseFloat(String(val)) || 0);
+        }
+        
+        const match = await learningService.matchLearnedPatterns(features, featureColumns);
+        
+        if (match.matchedPattern && match.confidence > 0.3) {
+          attackCount++;
+          results.push({
+            rowIndex: i,
+            matchedPattern: match.matchedPattern.patternName,
+            confidence: match.confidence,
+            isAttack: true,
+          });
+        } else {
+          results.push({
+            rowIndex: i,
+            matchedPattern: null,
+            confidence: 0,
+            isAttack: false,
+          });
+        }
+      }
+      
+      res.json({
+        totalAnalyzed: results.length,
+        attacksDetected: attackCount,
+        normalTraffic: results.length - attackCount,
+        attackRate: attackCount / results.length,
+        sampleResults: results.slice(0, 20),
+      });
+    } catch (error) {
+      console.error("Pattern analysis error:", error);
+      res.status(500).json({ error: "Failed to analyze with patterns" });
+    }
+  });
+  
+  // Clear all learned data
+  app.delete("/api/learning/clear", async (req, res) => {
+    try {
+      await learningService.clearAllData();
+      res.json({ success: true, message: "Đã xóa tất cả dữ liệu học" });
+    } catch (error) {
+      console.error("Clear learning error:", error);
+      res.status(500).json({ error: "Failed to clear learning data" });
     }
   });
 
