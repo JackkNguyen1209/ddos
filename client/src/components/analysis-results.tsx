@@ -21,7 +21,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { ML_MODELS, ALGORITHM_DETAILS, ATTACK_TYPE_INFO, type AnalysisResult, type AttackTypeResult } from "@shared/schema";
+import { ML_MODELS, ALGORITHM_DETAILS, ATTACK_TYPE_INFO, ATTACK_CATEGORY_INFO, type AnalysisResult, type AttackTypeResult, type AttackCategory } from "@shared/schema";
 
 interface AnalysisResultsProps {
   results: AnalysisResult[];
@@ -907,13 +907,29 @@ function AttackTypesAnalysis({ results, getModelName }: AttackTypesAnalysisProps
               <AlertTriangle className="h-5 w-5 text-destructive" />
               Chi Tiết Loại Tấn Công
             </CardTitle>
+            <CardDescription>
+              Phân loại nguồn tấn công: Remote Access, Bruteforce, Reconnaissance...
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3 max-h-64 overflow-y-auto">
+            <div className="space-y-3 max-h-80 overflow-y-auto">
               {sortedAttacks.map((attack, idx) => {
                 const info = ATTACK_TYPE_INFO[attack.type];
+                const categoryInfo = info ? ATTACK_CATEGORY_INFO[info.category] : null;
+                const severityColors = {
+                  low: "bg-green-500",
+                  medium: "bg-yellow-500",
+                  high: "bg-orange-500",
+                  critical: "bg-red-600"
+                };
+                const severityLabels = {
+                  low: "Thấp",
+                  medium: "Trung bình",
+                  high: "Cao",
+                  critical: "Nghiêm trọng"
+                };
                 return (
-                  <div key={attack.type} className="p-3 rounded-lg border">
+                  <div key={attack.type} className="p-3 rounded-lg border" data-testid={`attack-type-${attack.type}`}>
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <div 
@@ -922,16 +938,38 @@ function AttackTypesAnalysis({ results, getModelName }: AttackTypesAnalysisProps
                         />
                         <span className="font-medium">{info?.nameVi || attack.type}</span>
                       </div>
-                      <Badge variant={attack.confidence > 0.8 ? "destructive" : "secondary"}>
-                        {(attack.confidence * 100).toFixed(0)}% tin cậy
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        {info && (
+                          <Badge className={`${severityColors[info.severity]} text-white text-xs`}>
+                            {severityLabels[info.severity]}
+                          </Badge>
+                        )}
+                        <Badge variant={attack.confidence > 0.8 ? "destructive" : "secondary"}>
+                          {(attack.confidence * 100).toFixed(0)}%
+                        </Badge>
+                      </div>
                     </div>
+                    
+                    {categoryInfo && (
+                      <div className="mb-2">
+                        <Badge variant="outline" className="text-xs">
+                          {categoryInfo.nameVi}
+                        </Badge>
+                      </div>
+                    )}
+                    
+                    {info?.method && (
+                      <p className="text-xs text-muted-foreground mb-2 italic">
+                        Phương thức: {info.method}
+                      </p>
+                    )}
+                    
                     <div className="flex items-center justify-between text-sm text-muted-foreground">
                       <span>{attack.count.toLocaleString()} mẫu ({attack.percentage.toFixed(1)}%)</span>
                     </div>
                     {attack.indicators.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2">
-                        {attack.indicators.slice(0, 3).map((ind, i) => (
+                        {attack.indicators.slice(0, 4).map((ind, i) => (
                           <Badge key={i} variant="outline" className="text-xs">
                             {ind}
                           </Badge>
@@ -946,14 +984,66 @@ function AttackTypesAnalysis({ results, getModelName }: AttackTypesAnalysisProps
         </Card>
       </div>
 
+      <Card className="bg-accent/10">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Shield className="h-5 w-5 text-primary" />
+            Phân Loại Nguồn Tấn Công
+          </CardTitle>
+          <CardDescription>
+            Các danh mục tấn công được phát hiện: Trinh sát, Brute Force, Remote Access...
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {(() => {
+              const categoryGroups = new Map<AttackCategory, { attacks: typeof sortedAttacks, count: number }>();
+              for (const attack of sortedAttacks) {
+                const info = ATTACK_TYPE_INFO[attack.type];
+                if (info) {
+                  const cat = info.category;
+                  if (!categoryGroups.has(cat)) {
+                    categoryGroups.set(cat, { attacks: [], count: 0 });
+                  }
+                  categoryGroups.get(cat)!.attacks.push(attack);
+                  categoryGroups.get(cat)!.count += attack.count;
+                }
+              }
+              return Array.from(categoryGroups.entries())
+                .sort((a, b) => b[1].count - a[1].count)
+                .map(([cat, data]) => {
+                  const catInfo = ATTACK_CATEGORY_INFO[cat];
+                  return (
+                    <div key={cat} className="p-4 rounded-lg border bg-background" data-testid={`attack-category-${cat}`}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className={`w-3 h-3 rounded-full ${catInfo.color}`} />
+                        <span className="font-semibold text-sm">{catInfo.nameVi}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-3">{catInfo.description}</p>
+                      <div className="text-sm font-medium mb-2">{data.count.toLocaleString()} mẫu</div>
+                      <div className="flex flex-wrap gap-1">
+                        {data.attacks.map(at => (
+                          <Badge key={at.type} variant="secondary" className="text-xs">
+                            {ATTACK_TYPE_INFO[at.type]?.nameVi}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                });
+            })()}
+          </div>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <BookOpen className="h-5 w-5 text-primary" />
-            Công Thức Phát Hiện Theo Loại
+            Công Thức & Phương Thức Tấn Công
           </CardTitle>
           <CardDescription>
-            Các quy tắc và ngưỡng được sử dụng để phân loại loại tấn công DDoS
+            Chi tiết kỹ thuật và công thức phát hiện từng loại tấn công
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -961,14 +1051,37 @@ function AttackTypesAnalysis({ results, getModelName }: AttackTypesAnalysisProps
             {sortedAttacks.map((attack) => {
               const info = ATTACK_TYPE_INFO[attack.type];
               if (!info) return null;
+              const categoryInfo = ATTACK_CATEGORY_INFO[info.category];
+              const severityColors = {
+                low: "text-green-600",
+                medium: "text-yellow-600",
+                high: "text-orange-600",
+                critical: "text-red-600"
+              };
               
               return (
                 <div key={attack.type} className="p-4 rounded-lg border bg-accent/20">
-                  <h4 className="font-semibold flex items-center gap-2 mb-2">
-                    <Target className="h-4 w-4 text-primary" />
-                    {info.nameVi} ({info.name})
-                  </h4>
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-semibold flex items-center gap-2">
+                      <Target className="h-4 w-4 text-primary" />
+                      {info.nameVi}
+                    </h4>
+                    <span className={`text-xs font-medium ${severityColors[info.severity]}`}>
+                      Mức độ: {info.severity === "critical" ? "Nghiêm trọng" : info.severity === "high" ? "Cao" : info.severity === "medium" ? "TB" : "Thấp"}
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant="outline" className="text-xs">{categoryInfo.nameVi}</Badge>
+                    <span className="text-xs text-muted-foreground">{info.name}</span>
+                  </div>
+                  
                   <p className="text-sm text-muted-foreground mb-3">{info.description}</p>
+                  
+                  <div className="mb-3 p-2 rounded bg-primary/5">
+                    <span className="text-xs font-medium text-primary">Phương thức tấn công:</span>
+                    <p className="text-xs text-muted-foreground mt-1">{info.method}</p>
+                  </div>
                   
                   <div className="mb-3">
                     <span className="text-xs font-medium text-primary">Công thức phát hiện:</span>

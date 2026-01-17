@@ -617,10 +617,15 @@ function classifyAttackTypes(
 ): AttackTypeResult[] {
   const attackCounts: Record<DDoSAttackType, { count: number; indicators: Set<string>; confidence: number }> = {
     port_scan: { count: 0, indicators: new Set(), confidence: 0 },
+    service_scan: { count: 0, indicators: new Set(), confidence: 0 },
+    ssh_bruteforce: { count: 0, indicators: new Set(), confidence: 0 },
+    ftp_bruteforce: { count: 0, indicators: new Set(), confidence: 0 },
+    telnet_bruteforce: { count: 0, indicators: new Set(), confidence: 0 },
     syn_flood: { count: 0, indicators: new Set(), confidence: 0 },
     udp_flood: { count: 0, indicators: new Set(), confidence: 0 },
     icmp_flood: { count: 0, indicators: new Set(), confidence: 0 },
     http_flood: { count: 0, indicators: new Set(), confidence: 0 },
+    slowloris: { count: 0, indicators: new Set(), confidence: 0 },
     dns_amplification: { count: 0, indicators: new Set(), confidence: 0 },
     ntp_amplification: { count: 0, indicators: new Set(), confidence: 0 },
     ldap_reflection: { count: 0, indicators: new Set(), confidence: 0 },
@@ -700,10 +705,28 @@ function classifyAttackTypes(
       indicators.push(`${uniquePorts} cổng đích khác nhau`);
       if (duration < 1) indicators.push("Kết nối ngắn");
       indicators.push("Quét nhiều cổng từ 1 IP");
+    } else if (dstPort === 22) {
+      attackType = "ssh_bruteforce";
+      confidence = 0.85;
+      indicators.push("Cổng SSH 22");
+      indicators.push("Dò mật khẩu SSH");
+      if (duration < 1) indicators.push("Nhiều connection attempt");
+    } else if (dstPort === 21) {
+      attackType = "ftp_bruteforce";
+      confidence = 0.8;
+      indicators.push("Cổng FTP 21");
+      indicators.push("Dò mật khẩu FTP");
+    } else if (dstPort === 23) {
+      attackType = "telnet_bruteforce";
+      confidence = 0.9;
+      indicators.push("Cổng Telnet 23");
+      indicators.push("Dò mật khẩu Telnet");
+      indicators.push("Nguy cơ IoT botnet cao");
     } else if (dstPort === 3389) {
       attackType = "rdp_attack";
       confidence = 0.85;
       indicators.push("Cổng RDP 3389");
+      indicators.push("Tấn công Remote Desktop");
       if (duration < 1) indicators.push("Kết nối ngắn");
       if (ipBasedAttackers.has(srcIp)) indicators.push("Tấn công từ nhiều IP");
     } else if (dstPort === 389 || dstPort === 636 || dstPort === 3268) {

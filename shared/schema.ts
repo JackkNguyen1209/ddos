@@ -19,13 +19,100 @@ export const datasetSchema = z.object({
 
 export type Dataset = z.infer<typeof datasetSchema>;
 
+// Attack Categories - Phân loại nguồn tấn công
+export const attackCategories = [
+  "reconnaissance",      // Trinh sát - quét mạng
+  "bruteforce",          // Tấn công brute force mật khẩu
+  "remote_access",       // Tấn công truy cập từ xa
+  "volumetric",          // Tấn công làm ngập (flood)
+  "amplification",       // Tấn công khuếch đại
+  "application_layer",   // Tấn công lớp ứng dụng
+  "protocol_exploit",    // Khai thác lỗ hổng giao thức
+] as const;
+
+export type AttackCategory = typeof attackCategories[number];
+
+// Attack Category Info
+export interface AttackCategoryInfo {
+  category: AttackCategory;
+  name: string;
+  nameVi: string;
+  description: string;
+  color: string;
+  icon: string;
+}
+
+export const ATTACK_CATEGORY_INFO: Record<AttackCategory, AttackCategoryInfo> = {
+  reconnaissance: {
+    category: "reconnaissance",
+    name: "Reconnaissance",
+    nameVi: "Trinh sát mạng",
+    description: "Quét và thu thập thông tin về hệ thống mục tiêu trước khi tấn công chính",
+    color: "bg-yellow-500",
+    icon: "Search"
+  },
+  bruteforce: {
+    category: "bruteforce",
+    name: "Brute Force",
+    nameVi: "Tấn công Brute Force",
+    description: "Thử đăng nhập bằng cách dò mật khẩu liên tục với nhiều tổ hợp khác nhau",
+    color: "bg-orange-500",
+    icon: "Key"
+  },
+  remote_access: {
+    category: "remote_access",
+    name: "Remote Access",
+    nameVi: "Tấn công truy cập từ xa",
+    description: "Cố gắng truy cập trái phép vào hệ thống qua các dịch vụ điều khiển từ xa",
+    color: "bg-red-600",
+    icon: "Monitor"
+  },
+  volumetric: {
+    category: "volumetric",
+    name: "Volumetric Attack",
+    nameVi: "Tấn công làm ngập",
+    description: "Gửi lượng lớn traffic để làm quá tải băng thông và tài nguyên mạng",
+    color: "bg-purple-500",
+    icon: "Waves"
+  },
+  amplification: {
+    category: "amplification",
+    name: "Amplification Attack",
+    nameVi: "Tấn công khuếch đại",
+    description: "Lợi dụng server trung gian để khuếch đại traffic gấp nhiều lần đến nạn nhân",
+    color: "bg-red-500",
+    icon: "Volume2"
+  },
+  application_layer: {
+    category: "application_layer",
+    name: "Application Layer",
+    nameVi: "Tấn công lớp ứng dụng",
+    description: "Tấn công nhắm vào các dịch vụ ứng dụng như HTTP, HTTPS để làm sập server",
+    color: "bg-blue-500",
+    icon: "Globe"
+  },
+  protocol_exploit: {
+    category: "protocol_exploit",
+    name: "Protocol Exploit",
+    nameVi: "Khai thác giao thức",
+    description: "Lợi dụng điểm yếu trong thiết kế của các giao thức mạng (TCP, ICMP)",
+    color: "bg-indigo-500",
+    icon: "Shield"
+  }
+};
+
 // DDoS Attack types
 export const ddosAttackTypes = [
   "port_scan",
+  "service_scan",
+  "ssh_bruteforce",
+  "ftp_bruteforce",
+  "telnet_bruteforce",
   "syn_flood",
   "udp_flood",
   "icmp_flood",
   "http_flood",
+  "slowloris",
   "dns_amplification",
   "ntp_amplification",
   "ldap_reflection",
@@ -42,10 +129,13 @@ export interface AttackTypeInfo {
   type: DDoSAttackType;
   name: string;
   nameVi: string;
+  category: AttackCategory;
   description: string;
+  method: string;
   indicators: string[];
   formula: string;
   ports?: number[];
+  severity: "low" | "medium" | "high" | "critical";
 }
 
 export const ATTACK_TYPE_INFO: Record<DDoSAttackType, AttackTypeInfo> = {
@@ -53,109 +143,205 @@ export const ATTACK_TYPE_INFO: Record<DDoSAttackType, AttackTypeInfo> = {
     type: "port_scan",
     name: "Port Scan",
     nameVi: "Quét cổng",
+    category: "reconnaissance",
     description: "Kẻ tấn công quét nhiều cổng để tìm dịch vụ đang mở",
+    method: "Gửi gói TCP SYN hoặc UDP đến nhiều cổng khác nhau để xác định cổng nào mở",
     indicators: ["Nhiều cổng đích khác nhau từ cùng IP nguồn", "Kết nối ngắn", "Thất bại nhiều"],
     formula: "unique_dst_ports_per_src_ip >= 10",
     ports: [],
+    severity: "medium",
+  },
+  service_scan: {
+    type: "service_scan",
+    name: "Service Scan",
+    nameVi: "Quét dịch vụ",
+    category: "reconnaissance",
+    description: "Thu thập thông tin về phiên bản và loại dịch vụ đang chạy",
+    method: "Gửi các probe đặc biệt để xác định phiên bản phần mềm (banner grabbing)",
+    indicators: ["Nhiều request đến cổng dịch vụ phổ biến", "Pattern nhận diện service", "Từ cùng IP nguồn"],
+    formula: "connection_to_common_ports >= 5 AND banner_request_detected",
+    ports: [21, 22, 23, 25, 80, 110, 143, 443, 3306, 5432],
+    severity: "low",
+  },
+  ssh_bruteforce: {
+    type: "ssh_bruteforce",
+    name: "SSH Brute Force",
+    nameVi: "Dò mật khẩu SSH",
+    category: "bruteforce",
+    description: "Thử đăng nhập SSH liên tục với nhiều username/password khác nhau",
+    method: "Tự động thử hàng ngàn tổ hợp username:password để truy cập SSH",
+    indicators: ["Cổng 22", "Nhiều login attempt thất bại", "Từ một hoặc nhiều IP"],
+    formula: "dst_port == 22 AND failed_connections > 50 AND connection_rate > 10/min",
+    ports: [22],
+    severity: "high",
+  },
+  ftp_bruteforce: {
+    type: "ftp_bruteforce",
+    name: "FTP Brute Force",
+    nameVi: "Dò mật khẩu FTP",
+    category: "bruteforce",
+    description: "Thử đăng nhập FTP liên tục để chiếm quyền truy cập file",
+    method: "Tự động thử nhiều tổ hợp credentials để truy cập FTP server",
+    indicators: ["Cổng 21", "530 Login incorrect nhiều", "Cùng IP hoặc IP range"],
+    formula: "dst_port == 21 AND failed_auth > 30",
+    ports: [21],
+    severity: "high",
+  },
+  telnet_bruteforce: {
+    type: "telnet_bruteforce",
+    name: "Telnet Brute Force",
+    nameVi: "Dò mật khẩu Telnet",
+    category: "bruteforce",
+    description: "Thử đăng nhập Telnet để điều khiển thiết bị từ xa",
+    method: "Thường nhắm vào thiết bị IoT, router có Telnet mở với mật khẩu yếu",
+    indicators: ["Cổng 23", "Login attempt lặp lại", "Pattern botnet như Mirai"],
+    formula: "dst_port == 23 AND failed_connections > 20",
+    ports: [23],
+    severity: "critical",
   },
   syn_flood: {
     type: "syn_flood",
     name: "SYN Flood",
     nameVi: "Tấn công SYN Flood",
+    category: "protocol_exploit",
     description: "Gửi nhiều gói SYN mà không hoàn thành TCP handshake",
+    method: "Khai thác TCP 3-way handshake: gửi SYN nhưng không ACK, gây half-open connections",
     indicators: ["Cờ SYN cao", "Không có ACK", "Kết nối half-open nhiều"],
     formula: "syn_count / total_packets > 0.8 AND ack_count / syn_count < 0.1",
     ports: [80, 443, 22, 21],
+    severity: "high",
   },
   udp_flood: {
     type: "udp_flood",
     name: "UDP Flood",
     nameVi: "Tấn công UDP Flood",
+    category: "volumetric",
     description: "Gửi lượng lớn gói UDP để làm quá tải băng thông",
+    method: "Gửi liên tục gói UDP đến các cổng ngẫu nhiên, target phải xử lý và trả ICMP unreachable",
     indicators: ["Protocol UDP", "Packet rate cao", "Kích thước nhỏ đồng đều"],
     formula: "protocol == UDP AND packets_per_sec > 10000 AND avg_packet_size < 100",
     ports: [53, 123, 161],
+    severity: "high",
   },
   icmp_flood: {
     type: "icmp_flood",
     name: "ICMP Flood",
     nameVi: "Tấn công ICMP/Ping Flood",
+    category: "volumetric",
     description: "Gửi nhiều gói ICMP (ping) để làm tê liệt mạng",
+    method: "Gửi lượng lớn ICMP Echo Request, buộc target phải trả lời Echo Reply",
     indicators: ["Protocol ICMP", "Echo request cao", "Nhiều nguồn"],
     formula: "protocol == ICMP AND icmp_type == 8 AND packet_rate > 5000",
     ports: [],
+    severity: "medium",
   },
   http_flood: {
     type: "http_flood",
     name: "HTTP Flood",
     nameVi: "Tấn công HTTP Flood",
+    category: "application_layer",
     description: "Gửi nhiều HTTP request để làm quá tải web server",
+    method: "Gửi request GET/POST hợp lệ với tần suất cao để exhaust server resources",
     indicators: ["Cổng 80/443", "Request rate cao", "Nhiều connection"],
     formula: "dst_port IN (80, 443) AND request_rate > 1000/s AND unique_src_ip > 100",
     ports: [80, 443, 8080],
+    severity: "high",
+  },
+  slowloris: {
+    type: "slowloris",
+    name: "Slowloris",
+    nameVi: "Tấn công Slowloris",
+    category: "application_layer",
+    description: "Giữ nhiều kết nối mở bằng cách gửi request chậm, không hoàn thành",
+    method: "Mở nhiều connection HTTP và gửi headers từ từ để giữ connection mở vô thời hạn",
+    indicators: ["Cổng 80/443", "Connection duration rất dài", "Incomplete headers"],
+    formula: "dst_port IN (80, 443) AND avg_connection_duration > 30s AND bytes_per_sec < 10",
+    ports: [80, 443],
+    severity: "medium",
   },
   dns_amplification: {
     type: "dns_amplification",
     name: "DNS Amplification",
     nameVi: "Tấn công khuếch đại DNS",
+    category: "amplification",
     description: "Sử dụng DNS server để khuếch đại traffic đến nạn nhân",
+    method: "Gửi DNS query nhỏ với spoofed source IP, DNS server trả response lớn đến victim",
     indicators: ["Cổng 53", "Response lớn hơn request", "Spoofed IP"],
     formula: "dst_port == 53 AND response_size / request_size > 10 AND ip_spoofing_detected",
     ports: [53],
+    severity: "critical",
   },
   ntp_amplification: {
     type: "ntp_amplification",
     name: "NTP Amplification",
     nameVi: "Tấn công khuếch đại NTP",
+    category: "amplification",
     description: "Sử dụng NTP server để khuếch đại traffic",
+    method: "Gửi monlist command (liệt kê 600 clients gần nhất) với spoofed IP, amplification 556x",
     indicators: ["Cổng 123", "Monlist command", "Response lớn"],
     formula: "dst_port == 123 AND response_size / request_size > 50",
     ports: [123],
+    severity: "critical",
   },
   ldap_reflection: {
     type: "ldap_reflection",
     name: "LDAP Reflection",
     nameVi: "Tấn công phản xạ LDAP",
+    category: "amplification",
     description: "Lợi dụng LDAP server để phản xạ và khuếch đại traffic",
+    method: "Gửi CLDAP query với spoofed IP, nhận response khuếch đại 46-55 lần",
     indicators: ["Cổng 389/636", "Connectionless LDAP", "Response lớn"],
     formula: "dst_port IN (389, 636) AND protocol == UDP AND amplification_factor > 50",
     ports: [389, 636, 3268],
+    severity: "critical",
   },
   rdp_attack: {
     type: "rdp_attack",
     name: "RDP Attack",
     nameVi: "Tấn công Remote Desktop",
-    description: "Brute-force hoặc exploit lỗ hổng RDP",
+    category: "remote_access",
+    description: "Brute-force hoặc exploit lỗ hổng RDP để truy cập máy Windows từ xa",
+    method: "Dò mật khẩu RDP hoặc khai thác CVE như BlueKeep để chiếm quyền điều khiển",
     indicators: ["Cổng 3389", "Login attempt nhiều", "Nhiều IP nguồn"],
     formula: "dst_port == 3389 AND failed_auth > 100 AND unique_src_ip > 10",
     ports: [3389],
+    severity: "critical",
   },
   ssdp_amplification: {
     type: "ssdp_amplification",
     name: "SSDP Amplification",
     nameVi: "Tấn công khuếch đại SSDP",
+    category: "amplification",
     description: "Sử dụng SSDP/UPnP để khuếch đại traffic",
+    method: "Gửi M-SEARCH request đến thiết bị UPnP với spoofed IP, amplification 30x",
     indicators: ["Cổng 1900", "M-SEARCH request", "Response lớn"],
     formula: "dst_port == 1900 AND protocol == UDP AND amplification > 30",
     ports: [1900],
+    severity: "high",
   },
   memcached_amplification: {
     type: "memcached_amplification",
     name: "Memcached Amplification",
     nameVi: "Tấn công khuếch đại Memcached",
-    description: "Lợi dụng memcached server để khuếch đại DDoS",
+    category: "amplification",
+    description: "Lợi dụng memcached server để khuếch đại DDoS cực lớn",
+    method: "Gửi 'stats' command đến memcached mở, có thể khuếch đại lên đến 51,000x",
     indicators: ["Cổng 11211", "UDP protocol", "Khuếch đại cực lớn"],
     formula: "dst_port == 11211 AND protocol == UDP AND amplification > 50000",
     ports: [11211],
+    severity: "critical",
   },
   unknown: {
     type: "unknown",
     name: "Unknown Attack",
     nameVi: "Tấn công không xác định",
+    category: "volumetric",
     description: "Loại tấn công chưa được phân loại rõ ràng",
+    method: "Pattern bất thường không khớp với các loại tấn công đã biết",
     indicators: ["Pattern bất thường", "Không khớp signature đã biết"],
     formula: "anomaly_score > threshold AND !matches_known_pattern",
     ports: [],
+    severity: "medium",
   },
 };
 
