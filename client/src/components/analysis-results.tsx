@@ -21,7 +21,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { ML_MODELS, ALGORITHM_DETAILS, type AnalysisResult } from "@shared/schema";
+import { ML_MODELS, ALGORITHM_DETAILS, ATTACK_TYPE_INFO, type AnalysisResult, type AttackTypeResult } from "@shared/schema";
 
 interface AnalysisResultsProps {
   results: AnalysisResult[];
@@ -144,13 +144,18 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="comparison" className="w-full">
-            <TabsList className="grid w-full grid-cols-5 mb-6">
+            <TabsList className="grid w-full grid-cols-6 mb-6">
               <TabsTrigger value="comparison" data-testid="tab-comparison">So sánh</TabsTrigger>
-              <TabsTrigger value="radar" data-testid="tab-radar">Radar Chart</TabsTrigger>
+              <TabsTrigger value="attack-types" data-testid="tab-attack-types">Loại tấn công</TabsTrigger>
+              <TabsTrigger value="radar" data-testid="tab-radar">Radar</TabsTrigger>
               <TabsTrigger value="algorithms" data-testid="tab-algorithms">Thuật toán</TabsTrigger>
               <TabsTrigger value="explanation" data-testid="tab-explanation">Giải thích</TabsTrigger>
               <TabsTrigger value="details" data-testid="tab-details">Chi tiết</TabsTrigger>
             </TabsList>
+
+            <TabsContent value="attack-types" className="space-y-4">
+              <AttackTypesAnalysis results={results} getModelName={getModelName} />
+            </TabsContent>
 
             <TabsContent value="comparison" className="space-y-4">
               <div className="h-80">
@@ -688,6 +693,276 @@ function ResultInterpretation({ result, getModelName }: ResultInterpretationProp
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+interface AttackTypesAnalysisProps {
+  results: AnalysisResult[];
+  getModelName: (type: string) => string;
+}
+
+function AttackTypesAnalysis({ results, getModelName }: AttackTypesAnalysisProps) {
+  const allAttackTypes: AttackTypeResult[] = [];
+  
+  for (const result of results) {
+    if (result.attackTypes) {
+      for (const at of result.attackTypes) {
+        const existing = allAttackTypes.find(a => a.type === at.type);
+        if (existing) {
+          existing.count = Math.max(existing.count, at.count);
+          existing.confidence = Math.max(existing.confidence, at.confidence);
+          at.indicators.forEach(ind => {
+            if (!existing.indicators.includes(ind)) {
+              existing.indicators.push(ind);
+            }
+          });
+        } else {
+          allAttackTypes.push({ ...at });
+        }
+      }
+    }
+  }
+  
+  const sortedAttacks = allAttackTypes.sort((a, b) => b.count - a.count);
+  const totalAttacks = sortedAttacks.reduce((sum, at) => sum + at.count, 0);
+  
+  const pieColors = [
+    "hsl(0, 84%, 60%)",
+    "hsl(24, 95%, 53%)",
+    "hsl(45, 93%, 47%)",
+    "hsl(142, 71%, 45%)",
+    "hsl(199, 89%, 48%)",
+    "hsl(262, 83%, 58%)",
+    "hsl(328, 85%, 55%)",
+    "hsl(47, 96%, 53%)",
+  ];
+  
+  const pieData = sortedAttacks.map((at, idx) => ({
+    name: ATTACK_TYPE_INFO[at.type]?.nameVi || at.type,
+    value: at.count,
+    color: pieColors[idx % pieColors.length],
+  }));
+  
+  const lucidResult = results.find(r => r.modelType === "lucid_cnn");
+
+  if (sortedAttacks.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center">
+          <AlertTriangle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+          <p className="text-lg font-medium">Không phát hiện loại tấn công</p>
+          <p className="text-muted-foreground mt-2">
+            Không có mẫu DDoS nào được phát hiện hoặc dataset không chứa thông tin cổng/giao thức cần thiết để phân loại.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {lucidResult?.lucidAnalysis && (
+        <Card className="border-primary/50 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Zap className="h-5 w-5 text-primary" />
+              LUCID-inspired Neural Network
+            </CardTitle>
+            <CardDescription>
+              Mạng neural với convolution filters - lấy cảm hứng từ nghiên cứu LUCID (IEEE TNSM 2020)
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+              <div className="text-center p-3 rounded-lg bg-accent/50">
+                <p className="text-2xl font-bold text-primary">{lucidResult.lucidAnalysis.cnnLayers}</p>
+                <p className="text-xs text-muted-foreground">Conv Layers</p>
+              </div>
+              <div className="text-center p-3 rounded-lg bg-accent/50">
+                <p className="text-2xl font-bold text-primary">{lucidResult.lucidAnalysis.kernelSize}x{lucidResult.lucidAnalysis.flowFeatures}</p>
+                <p className="text-xs text-muted-foreground">Kernel Size</p>
+              </div>
+              <div className="text-center p-3 rounded-lg bg-accent/50">
+                <p className="text-2xl font-bold text-primary">{lucidResult.lucidAnalysis.timeWindow}s</p>
+                <p className="text-xs text-muted-foreground">Time Window</p>
+              </div>
+              <div className="text-center p-3 rounded-lg bg-accent/50">
+                <p className="text-2xl font-bold text-primary">{lucidResult.lucidAnalysis.flowFeatures}</p>
+                <p className="text-xs text-muted-foreground">Flow Features</p>
+              </div>
+              <div className="text-center p-3 rounded-lg bg-accent/50">
+                <p className="text-2xl font-bold text-chart-3">{(lucidResult.lucidAnalysis.anomalyScore * 100).toFixed(1)}%</p>
+                <p className="text-xs text-muted-foreground">Anomaly Score</p>
+              </div>
+              <div className="text-center p-3 rounded-lg bg-accent/50">
+                <p className="text-2xl font-bold text-chart-2">{(lucidResult.lucidAnalysis.confidence * 100).toFixed(1)}%</p>
+                <p className="text-xs text-muted-foreground">Confidence</p>
+              </div>
+            </div>
+            <div className="mt-4 p-4 rounded-lg bg-background">
+              <h4 className="font-semibold mb-2">Công thức Neural Network:</h4>
+              <code className="text-sm text-muted-foreground">
+                output = sigmoid(W × maxpool(ReLU(conv(X, K))) + b)
+              </code>
+              <p className="text-xs text-muted-foreground mt-2">
+                Trong đó: X = feature matrix, K = {lucidResult.lucidAnalysis.kernelSize}×{lucidResult.lucidAnalysis.flowFeatures} convolution filters, 
+                maxpool = global max pooling, W = FC weights, b = bias
+              </p>
+              <p className="text-xs text-chart-3 mt-2">
+                Lưu ý: Đây là mô hình nhẹ lấy cảm hứng từ LUCID, phù hợp cho môi trường web. 
+                Để có độ chính xác cao nhất, hãy sử dụng LUCID gốc từ GitHub với TensorFlow/Python.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <BarChart3 className="h-5 w-5 text-primary" />
+              Phân Bố Loại Tấn Công
+            </CardTitle>
+            <CardDescription>
+              Tổng cộng {totalAttacks.toLocaleString()} mẫu DDoS được phân loại
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={40}
+                    outerRadius={80}
+                    paddingAngle={2}
+                    dataKey="value"
+                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    labelLine={false}
+                  >
+                    {pieData.map((entry, idx) => (
+                      <Cell key={`cell-${idx}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip 
+                    formatter={(value: number) => [value.toLocaleString(), "Số lượng"]}
+                    contentStyle={{ 
+                      backgroundColor: 'hsl(var(--background))', 
+                      border: '1px solid hsl(var(--border))' 
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Chi Tiết Loại Tấn Công
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3 max-h-64 overflow-y-auto">
+              {sortedAttacks.map((attack, idx) => {
+                const info = ATTACK_TYPE_INFO[attack.type];
+                return (
+                  <div key={attack.type} className="p-3 rounded-lg border">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <div 
+                          className="w-3 h-3 rounded-full" 
+                          style={{ backgroundColor: pieColors[idx % pieColors.length] }}
+                        />
+                        <span className="font-medium">{info?.nameVi || attack.type}</span>
+                      </div>
+                      <Badge variant={attack.confidence > 0.8 ? "destructive" : "secondary"}>
+                        {(attack.confidence * 100).toFixed(0)}% tin cậy
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-between text-sm text-muted-foreground">
+                      <span>{attack.count.toLocaleString()} mẫu ({attack.percentage.toFixed(1)}%)</span>
+                    </div>
+                    {attack.indicators.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {attack.indicators.slice(0, 3).map((ind, i) => (
+                          <Badge key={i} variant="outline" className="text-xs">
+                            {ind}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <BookOpen className="h-5 w-5 text-primary" />
+            Công Thức Phát Hiện Theo Loại
+          </CardTitle>
+          <CardDescription>
+            Các quy tắc và ngưỡng được sử dụng để phân loại loại tấn công DDoS
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid md:grid-cols-2 gap-4">
+            {sortedAttacks.map((attack) => {
+              const info = ATTACK_TYPE_INFO[attack.type];
+              if (!info) return null;
+              
+              return (
+                <div key={attack.type} className="p-4 rounded-lg border bg-accent/20">
+                  <h4 className="font-semibold flex items-center gap-2 mb-2">
+                    <Target className="h-4 w-4 text-primary" />
+                    {info.nameVi} ({info.name})
+                  </h4>
+                  <p className="text-sm text-muted-foreground mb-3">{info.description}</p>
+                  
+                  <div className="mb-3">
+                    <span className="text-xs font-medium text-primary">Công thức phát hiện:</span>
+                    <code className="block mt-1 p-2 rounded bg-background text-xs overflow-x-auto">
+                      {info.formula}
+                    </code>
+                  </div>
+                  
+                  <div>
+                    <span className="text-xs font-medium text-primary">Dấu hiệu nhận biết:</span>
+                    <ul className="mt-1 space-y-1">
+                      {info.indicators.map((ind, i) => (
+                        <li key={i} className="text-xs text-muted-foreground flex items-center gap-1">
+                          <CheckCircle2 className="h-3 w-3 text-chart-2" />
+                          {ind}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  
+                  {info.ports && info.ports.length > 0 && (
+                    <div className="mt-2">
+                      <span className="text-xs font-medium text-primary">Cổng liên quan: </span>
+                      <span className="text-xs text-muted-foreground">
+                        {info.ports.join(", ")}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

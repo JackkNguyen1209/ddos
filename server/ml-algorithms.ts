@@ -418,8 +418,9 @@ class LUCIDCNN {
   private kernelRows: number;
   private learningRate: number;
   private epochs: number;
+  private numCols: number = 0;
   
-  constructor(numKernels: number = 64, kernelRows: number = 3, learningRate: number = 0.01, epochs: number = 50) {
+  constructor(numKernels: number = 32, kernelRows: number = 3, learningRate: number = 0.01, epochs: number = 30) {
     this.numKernels = numKernels;
     this.kernelRows = kernelRows;
     this.learningRate = learningRate;
@@ -430,18 +431,25 @@ class LUCIDCNN {
     return Math.max(0, x);
   }
   
+  private reluDerivative(x: number): number {
+    return x > 0 ? 1 : 0;
+  }
+  
   private sigmoid(x: number): number {
     return 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x))));
   }
   
   private initializeKernels(numFeatures: number): void {
+    this.numCols = numFeatures;
     this.kernels = [];
+    const scale = Math.sqrt(2.0 / (this.kernelRows * numFeatures));
+    
     for (let k = 0; k < this.numKernels; k++) {
       const kernel: number[][] = [];
       for (let i = 0; i < this.kernelRows; i++) {
         const row: number[] = [];
         for (let j = 0; j < numFeatures; j++) {
-          row.push((Math.random() - 0.5) * 0.1);
+          row.push((Math.random() - 0.5) * scale);
         }
         kernel.push(row);
       }
@@ -452,40 +460,64 @@ class LUCIDCNN {
     this.fcBias = 0;
   }
   
-  private conv2d(input: number[][], kernel: number[][]): number[] {
-    const outputSize = input.length - kernel.length + 1;
+  private conv2d(input: number[][], kernel: number[][]): { output: number[]; preActivation: number[] } {
+    const outputSize = Math.max(1, input.length - kernel.length + 1);
     const output: number[] = [];
+    const preActivation: number[] = [];
     
     for (let i = 0; i < outputSize; i++) {
       let sum = 0;
-      for (let kr = 0; kr < kernel.length; kr++) {
-        for (let kc = 0; kc < kernel[0].length; kc++) {
+      for (let kr = 0; kr < kernel.length && (i + kr) < input.length; kr++) {
+        for (let kc = 0; kc < kernel[0].length && kc < input[0].length; kc++) {
           sum += input[i + kr][kc] * kernel[kr][kc];
         }
       }
+      preActivation.push(sum);
       output.push(this.relu(sum));
     }
     
-    return output;
+    return { output, preActivation };
   }
   
-  private maxPool(input: number[]): number {
-    return Math.max(...input, 0);
+  private maxPoolWithIndex(input: number[]): { value: number; index: number } {
+    if (input.length === 0) return { value: 0, index: 0 };
+    let maxVal = input[0];
+    let maxIdx = 0;
+    for (let i = 1; i < input.length; i++) {
+      if (input[i] > maxVal) {
+        maxVal = input[i];
+        maxIdx = i;
+      }
+    }
+    return { value: maxVal, index: maxIdx };
   }
   
-  private forward(features: number[][]): { pooled: number[]; prediction: number } {
+  private forward(matrix: number[][]): { 
+    pooled: number[]; 
+    poolIndices: number[]; 
+    convOutputs: number[][]; 
+    preActivations: number[][]; 
+    prediction: number;
+    z: number;
+  } {
     const pooled: number[] = [];
+    const poolIndices: number[] = [];
+    const convOutputs: number[][] = [];
+    const preActivations: number[][] = [];
     
     for (const kernel of this.kernels) {
-      const convOutput = this.conv2d(features, kernel);
-      const maxVal = this.maxPool(convOutput);
-      pooled.push(maxVal);
+      const { output, preActivation } = this.conv2d(matrix, kernel);
+      convOutputs.push(output);
+      preActivations.push(preActivation);
+      const { value, index } = this.maxPoolWithIndex(output);
+      pooled.push(value);
+      poolIndices.push(index);
     }
     
     const z = pooled.reduce((sum, val, i) => sum + val * this.fcWeights[i], 0) + this.fcBias;
     const prediction = this.sigmoid(z);
     
-    return { pooled, prediction };
+    return { pooled, poolIndices, convOutputs, preActivations, prediction, z };
   }
   
   private reshapeToMatrix(features: number[], numRows: number): number[][] {
@@ -507,21 +539,43 @@ class LUCIDCNN {
   train(features: number[][], labels: number[]): void {
     const numFeatures = features[0].length;
     const matrixRows = Math.max(this.kernelRows + 2, 5);
+    const numCols = Math.ceil(numFeatures / matrixRows);
     
-    this.initializeKernels(Math.ceil(numFeatures / matrixRows));
+    this.initializeKernels(numCols);
     
     for (let epoch = 0; epoch < this.epochs; epoch++) {
+      let epochLoss = 0;
+      
       for (let i = 0; i < features.length; i++) {
         const matrix = this.reshapeToMatrix(features[i], matrixRows);
-        const { pooled, prediction } = this.forward(matrix);
+        const { pooled, poolIndices, preActivations, prediction } = this.forward(matrix);
         
         const error = prediction - labels[i];
+        epochLoss += error * error;
         
-        for (let j = 0; j < this.fcWeights.length; j++) {
-          this.fcWeights[j] -= this.learningRate * error * pooled[j];
+        for (let k = 0; k < this.numKernels; k++) {
+          const cachedFCWeight = this.fcWeights[k];
+          const gradFC = error * pooled[k];
+          
+          const poolIdx = poolIndices[k];
+          if (poolIdx < preActivations[k].length) {
+            const dRelu = this.reluDerivative(preActivations[k][poolIdx]);
+            const gradKernel = error * cachedFCWeight * dRelu;
+            
+            for (let kr = 0; kr < this.kernelRows && (poolIdx + kr) < matrix.length; kr++) {
+              for (let kc = 0; kc < this.kernels[k][kr].length && kc < matrix[0].length; kc++) {
+                this.kernels[k][kr][kc] -= this.learningRate * gradKernel * matrix[poolIdx + kr][kc] * 0.1;
+              }
+            }
+          }
+          
+          this.fcWeights[k] -= this.learningRate * gradFC;
         }
+        
         this.fcBias -= this.learningRate * error;
       }
+      
+      if (epoch > 5 && epochLoss / features.length < 0.01) break;
     }
   }
   
@@ -566,13 +620,52 @@ function classifyAttackTypes(
     unknown: { count: 0, indicators: new Set(), confidence: 0 },
   };
 
-  const portCol = featureColumns.find(c => c.toLowerCase().includes("dst_port") || c.toLowerCase().includes("dstport") || c.toLowerCase().includes("destination_port"));
+  const portCol = featureColumns.find(c => c.toLowerCase().includes("dst_port") || c.toLowerCase().includes("dstport") || c.toLowerCase().includes("destination_port") || c.toLowerCase().includes("port"));
   const srcPortCol = featureColumns.find(c => c.toLowerCase().includes("src_port") || c.toLowerCase().includes("srcport") || c.toLowerCase().includes("source_port"));
   const protocolCol = featureColumns.find(c => c.toLowerCase().includes("protocol") || c.toLowerCase() === "proto");
-  const bytesCol = featureColumns.find(c => c.toLowerCase().includes("bytes") || c.toLowerCase().includes("length"));
-  const packetsCol = featureColumns.find(c => c.toLowerCase().includes("packets") || c.toLowerCase().includes("pkts"));
+  const bytesCol = featureColumns.find(c => c.toLowerCase().includes("bytes") || c.toLowerCase().includes("length") || c.toLowerCase().includes("size"));
+  const packetsCol = featureColumns.find(c => c.toLowerCase().includes("packets") || c.toLowerCase().includes("pkts") || c.toLowerCase().includes("count"));
   const durationCol = featureColumns.find(c => c.toLowerCase().includes("duration") || c.toLowerCase().includes("time"));
   const flagsCol = featureColumns.find(c => c.toLowerCase().includes("flag") || c.toLowerCase().includes("tcp_flags"));
+  const srcIpCol = featureColumns.find(c => c.toLowerCase().includes("src_ip") || c.toLowerCase().includes("srcip") || c.toLowerCase().includes("source_ip") || c.toLowerCase().includes("src_addr"));
+  const dstIpCol = featureColumns.find(c => c.toLowerCase().includes("dst_ip") || c.toLowerCase().includes("dstip") || c.toLowerCase().includes("dest_ip") || c.toLowerCase().includes("dst_addr"));
+
+  const srcIpToDstPorts: Map<string, Set<number>> = new Map();
+  const srcIpToDstIps: Map<string, Set<string>> = new Map();
+  const srcIpDurations: Map<string, number[]> = new Map();
+  
+  for (let i = 0; i < data.length; i++) {
+    if (predictions[i] !== 1) continue;
+    
+    const row = data[i];
+    const srcIp = srcIpCol ? String(row[srcIpCol] || "unknown") : "unknown";
+    const dstPort = portCol ? Number(row[portCol]) || 0 : 0;
+    const dstIp = dstIpCol ? String(row[dstIpCol] || "unknown") : "unknown";
+    const duration = durationCol ? Number(row[durationCol]) || 0 : 0;
+    
+    if (!srcIpToDstPorts.has(srcIp)) srcIpToDstPorts.set(srcIp, new Set());
+    if (dstPort > 0) srcIpToDstPorts.get(srcIp)!.add(dstPort);
+    
+    if (!srcIpToDstIps.has(srcIp)) srcIpToDstIps.set(srcIp, new Set());
+    srcIpToDstIps.get(srcIp)!.add(dstIp);
+    
+    if (!srcIpDurations.has(srcIp)) srcIpDurations.set(srcIp, []);
+    srcIpDurations.get(srcIp)!.push(duration);
+  }
+  
+  const portScanners = new Set<string>();
+  Array.from(srcIpToDstPorts.entries()).forEach(([srcIp, ports]) => {
+    if (ports.size >= 10) {
+      portScanners.add(srcIp);
+    }
+  });
+  
+  const ipBasedAttackers = new Set<string>();
+  Array.from(srcIpToDstIps.entries()).forEach(([srcIp, dstIps]) => {
+    if (dstIps.size >= 5) {
+      ipBasedAttackers.add(srcIp);
+    }
+  });
 
   for (let i = 0; i < data.length; i++) {
     if (predictions[i] !== 1) continue;
@@ -583,32 +676,43 @@ function classifyAttackTypes(
     const indicators: string[] = [];
 
     const dstPort = portCol ? Number(row[portCol]) || 0 : 0;
-    const srcPort = srcPortCol ? Number(row[srcPortCol]) || 0 : 0;
     const protocol = protocolCol ? String(row[protocolCol]).toLowerCase() : "";
     const bytes = bytesCol ? Number(row[bytesCol]) || 0 : 0;
     const packets = packetsCol ? Number(row[packetsCol]) || 0 : 0;
     const duration = durationCol ? Number(row[durationCol]) || 0 : 0;
     const flags = flagsCol ? String(row[flagsCol]).toUpperCase() : "";
+    const srcIp = srcIpCol ? String(row[srcIpCol] || "unknown") : "unknown";
 
-    if (dstPort === 3389) {
+    if (portScanners.has(srcIp)) {
+      const uniquePorts = srcIpToDstPorts.get(srcIp)?.size || 0;
+      attackType = "port_scan";
+      confidence = Math.min(0.95, 0.6 + (uniquePorts / 100));
+      indicators.push(`${uniquePorts} cổng đích khác nhau`);
+      if (duration < 1) indicators.push("Kết nối ngắn");
+      indicators.push("Quét nhiều cổng từ 1 IP");
+    } else if (dstPort === 3389) {
       attackType = "rdp_attack";
       confidence = 0.85;
       indicators.push("Cổng RDP 3389");
       if (duration < 1) indicators.push("Kết nối ngắn");
+      if (ipBasedAttackers.has(srcIp)) indicators.push("Tấn công từ nhiều IP");
     } else if (dstPort === 389 || dstPort === 636 || dstPort === 3268) {
       attackType = "ldap_reflection";
       confidence = 0.9;
       indicators.push(`Cổng LDAP ${dstPort}`);
-      if (protocol.includes("udp")) indicators.push("Giao thức UDP");
+      if (protocol.includes("udp") || protocol === "17") indicators.push("Giao thức UDP");
+      if (bytes > 1000) indicators.push("Phản hồi lớn (amplification)");
     } else if (dstPort === 53) {
       attackType = "dns_amplification";
       confidence = 0.8;
       indicators.push("Cổng DNS 53");
       if (bytes > 512) indicators.push("Response size lớn");
+      if (protocol.includes("udp") || protocol === "17") indicators.push("Giao thức UDP");
     } else if (dstPort === 123) {
       attackType = "ntp_amplification";
       confidence = 0.85;
       indicators.push("Cổng NTP 123");
+      if (bytes > 400) indicators.push("Khuếch đại cao");
     } else if (dstPort === 1900) {
       attackType = "ssdp_amplification";
       confidence = 0.85;
@@ -617,6 +721,7 @@ function classifyAttackTypes(
       attackType = "memcached_amplification";
       confidence = 0.9;
       indicators.push("Cổng Memcached 11211");
+      indicators.push("Khuếch đại cực cao (51,000x)");
     } else if (dstPort === 80 || dstPort === 443 || dstPort === 8080) {
       if (flags.includes("S") && !flags.includes("A")) {
         attackType = "syn_flood";
@@ -625,6 +730,7 @@ function classifyAttackTypes(
       } else {
         attackType = "http_flood";
         confidence = 0.75;
+        if (packets > 100) indicators.push("Số request cao");
       }
       indicators.push(`Cổng HTTP ${dstPort}`);
     } else if (protocol.includes("udp") || protocol === "17") {
@@ -632,10 +738,12 @@ function classifyAttackTypes(
       confidence = 0.7;
       indicators.push("Giao thức UDP");
       if (packets > 100) indicators.push("Số packet cao");
+      if (bytes > 1000) indicators.push("Lượng data lớn");
     } else if (protocol.includes("icmp") || protocol === "1") {
       attackType = "icmp_flood";
       confidence = 0.8;
       indicators.push("Giao thức ICMP");
+      if (packets > 50) indicators.push("Ping flood");
     } else if (flags.includes("S") && !flags.includes("A")) {
       attackType = "syn_flood";
       confidence = 0.8;
@@ -644,6 +752,7 @@ function classifyAttackTypes(
 
     if (indicators.length === 0 && attackType === "unknown") {
       indicators.push("Pattern bất thường");
+      if (packets > 100) indicators.push("Traffic volume cao");
     }
 
     attackCounts[attackType].count++;

@@ -2,7 +2,14 @@
 
 ## Overview
 
-A machine learning application for detecting DDoS (Distributed Denial of Service) attacks. Users can upload CSV datasets, the system automatically cleans and filters the data, then analyzes it using multiple ML algorithms (Decision Tree, Random Forest, KNN, Naive Bayes, Logistic Regression) to compare detection results and identify the best performing model.
+A machine learning application for detecting DDoS (Distributed Denial of Service) attacks. Users can upload CSV/Excel datasets, the system automatically cleans and filters the data, then analyzes it using multiple ML algorithms (Decision Tree, Random Forest, KNN, Naive Bayes, Logistic Regression, LUCID-inspired Neural Network) to compare detection results and identify the best performing model.
+
+### Key Features
+- **Multi-format support**: CSV and Excel (.xlsx, .xls) file upload up to 50MB
+- **6 ML algorithms**: Including LUCID-inspired Neural Network with convolution filters
+- **Attack type classification**: Detects Port Scan, SYN Flood, UDP Flood, ICMP Flood, HTTP Flood, DNS/NTP/LDAP/RDP attacks
+- **Vietnamese UI**: Full Vietnamese language interface
+- **Detailed explanations**: Formula-based detection with algorithm explanations
 
 ## User Preferences
 

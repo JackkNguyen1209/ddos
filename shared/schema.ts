@@ -54,8 +54,8 @@ export const ATTACK_TYPE_INFO: Record<DDoSAttackType, AttackTypeInfo> = {
     name: "Port Scan",
     nameVi: "Quét cổng",
     description: "Kẻ tấn công quét nhiều cổng để tìm dịch vụ đang mở",
-    indicators: ["Nhiều cổng đích khác nhau", "Kết nối ngắn", "Thất bại nhiều"],
-    formula: "unique_dst_ports > 100 AND avg_duration < 1s AND failure_rate > 0.8",
+    indicators: ["Nhiều cổng đích khác nhau từ cùng IP nguồn", "Kết nối ngắn", "Thất bại nhiều"],
+    formula: "unique_dst_ports_per_src_ip >= 10",
     ports: [],
   },
   syn_flood: {
@@ -293,8 +293,8 @@ export const ML_MODELS: MLModel[] = [
   },
   {
     type: "lucid_cnn",
-    name: "LUCID CNN (Deep Learning)",
-    description: "Mạng CNN nhẹ cho phát hiện DDoS real-time - dựa trên nghiên cứu LUCID",
+    name: "LUCID Neural Network",
+    description: "Mạng neural nhẹ lấy cảm hứng từ LUCID - phát hiện DDoS với convolution filters",
   },
 ];
 
@@ -336,9 +336,9 @@ export const ALGORITHM_DETAILS: Record<string, {
     bestFor: "Phân loại khi traffic DDoS có đặc trưng khác biệt rõ ràng với traffic bình thường",
   },
   lucid_cnn: {
-    howItWorks: "LUCID CNN (Lightweight Usable CNN in DDoS Detection) là mô hình deep learning được thiết kế cho phát hiện DDoS real-time. Thuật toán: 1) Chia traffic thành time windows (10s), 2) Trích xuất đặc trưng packet-level cho mỗi flow, 3) Chuẩn hóa và padding thành ma trận 2D, 4) Áp dụng Conv2D layer với kernel size 3x11 để học spatial patterns, 5) Max pooling và fully-connected layer để phân loại. Công thức CNN: output = σ(W * conv(X, K) + b) với K là kernel, W là weights, σ là ReLU activation.",
-    strengths: ["Tự động học features từ dữ liệu", "Phát hiện real-time với overhead thấp", "Độ chính xác cao (F1 > 0.99)", "Nhanh hơn 40x so với LSTM"],
-    weaknesses: ["Cần dữ liệu huấn luyện nhiều", "Khó giải thích quyết định", "Yêu cầu chuẩn hóa chặt chẽ"],
-    bestFor: "Phát hiện DDoS real-time trên thiết bị IoT/edge với nhiều loại tấn công khác nhau",
+    howItWorks: "LUCID Neural Network lấy cảm hứng từ nghiên cứu LUCID (IEEE TNSM 2020) sử dụng mạng neural với convolution filters. Thuật toán: 1) Reshape features thành ma trận 2D (time-window simulation), 2) Áp dụng 32 convolution filters với kernel 3×N để trích xuất patterns, 3) Max pooling lấy đặc trưng quan trọng nhất từ mỗi filter, 4) Fully-connected layer với sigmoid để phân loại. Backpropagation cập nhật cả kernel weights và FC weights. Công thức: output = sigmoid(W × maxpool(ReLU(conv(X, K))) + b).",
+    strengths: ["Tự động học patterns từ dữ liệu", "Xử lý được nhiều đặc trưng đồng thời", "Nhẹ và nhanh cho môi trường web", "Có thể phát hiện patterns phức tạp"],
+    weaknesses: ["Đơn giản hơn CNN thực sự", "Cần dữ liệu có nhãn để huấn luyện", "Kết quả phụ thuộc random initialization"],
+    bestFor: "Phát hiện DDoS khi cần kết hợp nhiều đặc trưng và học patterns tự động",
   },
 };
