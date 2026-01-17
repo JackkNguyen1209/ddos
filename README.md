@@ -5,7 +5,7 @@
 ## Tính năng
 
 - **Upload đa định dạng**: Hỗ trợ CSV và Excel (.xlsx, .xls) lên đến 50MB
-- **6 thuật toán ML**: Decision Tree, Random Forest, KNN, Naive Bayes, Logistic Regression, LUCID Neural Network
+- **7 thuật toán ML**: Decision Tree, Random Forest, KNN, Naive Bayes, Logistic Regression, LUCID Neural Network, Anomaly Ensemble
 - **Phân loại tấn công**: Phát hiện 17+ loại tấn công thuộc 7 nhóm (reconnaissance, bruteforce, remote_access, volumetric, amplification, application_layer, protocol_exploit)
 - **Chế độ kép**:
   - Supervised Mode: Dataset có nhãn - hiển thị Accuracy/Precision/Recall/F1
@@ -17,7 +17,20 @@
 ### Yêu cầu
 - Docker và Docker Compose
 
-### Các bước
+### Chạy nhanh (1 lệnh)
+
+```bash
+docker compose up -d
+```
+
+**Hoàn tất!** Ứng dụng sẽ tự động:
+- Khởi tạo PostgreSQL database
+- Chạy database migrations
+- Build và start server
+
+Truy cập: **http://localhost:8000**
+
+### Chi tiết các bước (nếu cần)
 
 1. Clone repository:
 ```bash
@@ -25,9 +38,10 @@ git clone <your-repo-url>
 cd ddos-detection-ml
 ```
 
-2. Tạo file `.env` từ template:
+2. (Tùy chọn) Tạo file `.env` để tùy chỉnh:
 ```bash
 cp .env.example .env
+# Sửa SESSION_SECRET nếu cần
 ```
 
 3. Chạy ứng dụng:
@@ -35,7 +49,10 @@ cp .env.example .env
 docker compose up -d
 ```
 
-4. Truy cập ứng dụng tại: http://localhost:8000
+4. Xem logs:
+```bash
+docker compose logs -f app
+```
 
 ### Dừng ứng dụng
 ```bash
