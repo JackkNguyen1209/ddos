@@ -40,11 +40,12 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
     return ML_MODELS.find((m) => m.type === type)?.name || type;
   };
 
+  // Sort by accuracy for supervised mode display
+  const sortedByAccuracy = [...results].sort((a, b) => b.accuracy - a.accuracy);
+  
   // For unlabeled mode: use first result (no ranking by accuracy)
-  // For supervised mode: sort by accuracy and pick best
-  const bestModel = isUnlabeled 
-    ? results[0] 
-    : [...results].sort((a, b) => b.accuracy - a.accuracy)[0];
+  // For supervised mode: use best by accuracy
+  const bestModel = isUnlabeled ? results[0] : sortedByAccuracy[0];
 
   // Supervised mode comparison data
   const comparisonData = isUnlabeled ? [] : results.map((r) => ({
