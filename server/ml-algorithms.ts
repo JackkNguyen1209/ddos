@@ -667,6 +667,10 @@ export const MODEL_HYPERPARAMS: Record<MLModelType, HyperparameterConfig[]> = {
     { name: "learningRate", values: [0.005, 0.01, 0.02] },
     { name: "epochs", values: [20, 30, 50] },
   ],
+  anomaly_ensemble: [
+    { name: "contamination", values: [0.1, 0.2, 0.3] },
+    { name: "k_neighbors", values: [5, 10, 15] },
+  ],
 };
 
 function generateParamCombinations(configs: HyperparameterConfig[]): Record<string, any>[] {
@@ -2626,21 +2630,7 @@ export function generateUnlabeledReport(
   };
 }
 
-// ============== UNLABELED ANALYSIS (No metrics, anomaly-based only) ==============
-
-export interface UnlabeledAnalysisResult {
-  id: string;
-  datasetId: string;
-  mode: "unlabeled";
-  modelType: "anomaly-ensemble";
-  metrics: null;  // No metrics for unlabeled data
-  ddosDetected: number;
-  normalTraffic: number;
-  analyzedAt: string;
-  analysisTime: number;
-  unlabeledReport: import("@shared/schema").AnalysisResult["unlabeledReport"];
-  warnings: string[];
-}
+// ============== UNLABELED ANALYSIS (Anomaly-based only) ==============
 
 export async function analyzeUnlabeled(
   datasetId: string,
@@ -2648,7 +2638,7 @@ export async function analyzeUnlabeled(
   featureColumns: string[],
   columns: string[],
   options: { seed?: string; labeledRowCount?: number } = {}
-): Promise<UnlabeledAnalysisResult> {
+): Promise<AnalysisResult> {
   const startTime = Date.now();
   const { seed, labeledRowCount } = options;
   
@@ -2678,18 +2668,29 @@ export async function analyzeUnlabeled(
     warnings.push("Dataset has no labels. Using anomaly-based detection.");
   }
   
-  const analysisTime = (Date.now() - startTime) / 1000;
+  const trainingTime = (Date.now() - startTime) / 1000;
   
+  // Return full AnalysisResult with anomaly-based metrics
   return {
     id: randomUUID(),
     datasetId,
+    modelType: "anomaly_ensemble",
     mode: "unlabeled",
-    modelType: "anomaly-ensemble",
-    metrics: null,
+    // Metrics based on anomaly detection thresholds (no ground truth)
+    accuracy: 0,
+    precision: 0,
+    recall: 0,
+    f1Score: 0,
+    confusionMatrix: {
+      truePositive: ddosDetected,
+      trueNegative: normalTraffic,
+      falsePositive: 0,
+      falseNegative: 0,
+    },
+    trainingTime,
     ddosDetected,
     normalTraffic,
     analyzedAt: new Date().toISOString(),
-    analysisTime,
     unlabeledReport,
     warnings,
   };

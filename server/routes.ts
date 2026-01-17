@@ -1020,16 +1020,17 @@ export async function registerRoutes(
         
         // Add warning if user requested supervised but we fell back to unlabeled
         if (requestedMode === "supervised" && !hasLabel) {
+          if (!result.warnings) result.warnings = [];
           result.warnings.push("Requested supervised mode but dataset has insufficient labels. Falling back to anomaly-based detection.");
         }
         
-        await storage.addResult(result as any);
+        await storage.addResult(result);
         results.push(result);
         
         // Audit log for analysis
         logAudit("analyze", "analysis", datasetId, { 
           modelCount: 1, 
-          models: ["anomaly-ensemble"],
+          models: ["anomaly_ensemble"],
           mode: effectiveMode,
           fallback: requestedMode !== effectiveMode
         }, req);

@@ -216,6 +216,7 @@ export class DatabaseStorage implements IStorage {
       unlabeledReport: result.unlabeledReport as any,
       advancedMetrics: result.enhancedMetrics as any,
       featureImportance: result.featureImportance as any,
+      warnings: result.warnings as any,
       status: "completed",
     });
   }
@@ -242,6 +243,7 @@ export class DatabaseStorage implements IStorage {
       unlabeledReport: r.unlabeledReport as any,
       enhancedMetrics: r.advancedMetrics as any,
       featureImportance: r.featureImportance as any,
+      warnings: (r.warnings as string[]) || undefined,
     }));
   }
 

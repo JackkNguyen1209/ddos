@@ -161,6 +161,7 @@ export const analysisResults = pgTable("analysis_results", {
   advancedMetrics: jsonb("advanced_metrics"),
   featureImportance: jsonb("feature_importance"),
   hyperparameters: jsonb("hyperparameters"),
+  warnings: jsonb("warnings"), // string[] for label/data warnings
   status: text("status").default("completed").notNull(), // pending | running | completed | error
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -618,6 +619,7 @@ export const mlModelTypes = [
   "naive_bayes",
   "logistic_regression",
   "lucid_cnn",
+  "anomaly_ensemble",
 ] as const;
 
 export type MLModelType = typeof mlModelTypes[number];
@@ -855,6 +857,11 @@ export const ML_MODELS: MLModel[] = [
     type: "lucid_cnn",
     name: "LUCID Neural Network",
     description: "Mạng neural nhẹ lấy cảm hứng từ LUCID - phát hiện DDoS với convolution filters",
+  },
+  {
+    type: "anomaly_ensemble",
+    name: "Anomaly Ensemble",
+    description: "Phát hiện bất thường kết hợp - sử dụng LOF và thống kê để phát hiện DDoS không cần nhãn",
   },
 ];
 
