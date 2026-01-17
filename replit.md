@@ -46,3 +46,18 @@ Preferred communication style: Simple, everyday language.
 - **Security Middleware**: Helmet.
 - **CSV Parsing**: PapaParse.
 - **File Upload**: Multer.
+- **Testing**: Vitest for unit testing.
+
+## Testing
+
+Run the ML pipeline determinism tests with:
+```bash
+npx vitest run --root=. server/ml-pipeline.test.ts
+```
+
+The test suite verifies:
+- Global seed management (setGlobalSeed/getGlobalSeed)
+- Train/validation/test split reproducibility (makeSplitIndices)
+- K-fold cross-validation fold generation (makeKFolds)
+- Cross-validation result determinism (kFoldCrossValidation)
+- Anomaly detection reproducibility (runAnomalyDetection)
