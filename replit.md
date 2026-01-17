@@ -156,3 +156,31 @@ The app supports comprehensive label detection across multiple dataset formats:
 3. Partial match in built-in mappings
 4. Heuristic detection (flood, exploit, anomaly patterns)
 5. Default: unknown anomaly (not confirmed attack)
+
+## User Feedback & Review System
+
+After analysis, users can review and correct results to improve future detection accuracy:
+
+### Database Tables
+- **user_feedback**: Stores user corrections with rowIndex, originalLabel, correctedLabel, isAttack, category, severity, userNotes
+- **user_tags**: Custom tags for data classification with tagName, tagColor, description, isAttackTag
+
+### Feedback API
+- `GET /api/feedback` - Get all user feedback
+- `POST /api/feedback` - Submit correction for a row (auto-adds to custom labels)
+- `POST /api/feedback/apply` - Apply pending feedback to learning system
+- `DELETE /api/feedback/:id` - Delete feedback entry
+- `GET /api/review/summary` - Get summary of pending/applied feedback
+
+### Tags API
+- `GET /api/tags` - Get all user-defined tags
+- `POST /api/tags` - Create new tag
+- `PUT /api/tags/:id/use` - Increment tag usage count
+- `DELETE /api/tags/:id` - Delete tag
+
+### UI Component: ReviewPanel
+- Located in `client/src/components/review-panel.tsx`
+- Two tabs: Feedback (corrections) and Tags (custom labels)
+- Add feedback with category, severity, attack status
+- Apply feedback to improve learning system
+- Create custom tags for data classification
