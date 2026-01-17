@@ -1,10 +1,52 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { analyzeWithModel, getFeatureColumns } from "./ml-algorithms";
+import { analyzeWithModel, getFeatureColumns, runAnomalyDetection, generateUnlabeledReport } from "./ml-algorithms";
 import { uploadDatasetSchema, analyzeRequestSchema, type DataRow, type Dataset } from "@shared/schema";
 import { randomUUID } from "crypto";
 import * as XLSX from "xlsx";
+
+// Helper function to extract features for report
+function extractFeaturesForReport(data: DataRow[], featureColumns: string[]): { features: number[][] } {
+  const features: number[][] = [];
+  for (const row of data) {
+    const featureVector: number[] = [];
+    for (const col of featureColumns) {
+      const value = row[col];
+      if (typeof value === "number") {
+        featureVector.push(value);
+      } else if (typeof value === "string") {
+        featureVector.push(parseFloat(value) || 0);
+      } else {
+        featureVector.push(0);
+      }
+    }
+    features.push(featureVector);
+  }
+  return { features };
+}
+
+// Helper function to normalize features for anomaly detection
+function normalizeForReport(features: number[][]): number[][] {
+  if (features.length === 0) return features;
+  const numFeatures = features[0].length;
+  const mins: number[] = new Array(numFeatures).fill(Infinity);
+  const maxs: number[] = new Array(numFeatures).fill(-Infinity);
+  
+  for (const row of features) {
+    for (let i = 0; i < numFeatures; i++) {
+      mins[i] = Math.min(mins[i], row[i]);
+      maxs[i] = Math.max(maxs[i], row[i]);
+    }
+  }
+  
+  return features.map((row) =>
+    row.map((val, i) => {
+      const range = maxs[i] - mins[i];
+      return range === 0 ? 0 : (val - mins[i]) / range;
+    })
+  );
+}
 
 function parseCSVLine(line: string): string[] {
   const result: string[] = [];
@@ -108,8 +150,120 @@ function parseDataContent(content: string, filename: string): { columns: string[
 }
 
 function hasLabelColumn(columns: string[]): boolean {
-  const labelColumns = ["label", "class", "attack", "target", "Label", "Class", "Attack", "Target", "is_attack", "ddos", "DDoS"];
+  const labelColumns = ["label", "class", "attack", "target", "Label", "Class", "Attack", "Target", "is_attack", "ddos", "DDoS", "attack_cat", "category"];
   return columns.some(col => labelColumns.includes(col) || labelColumns.some(lc => col.toLowerCase() === lc.toLowerCase()));
+}
+
+function findLabelColumn(columns: string[]): string | null {
+  const labelColumns = ["label", "class", "attack", "target", "is_attack", "ddos", "attack_cat", "category"];
+  const lowerColumns = columns.map(c => c.toLowerCase());
+  for (const lc of labelColumns) {
+    const idx = lowerColumns.indexOf(lc);
+    if (idx >= 0) return columns[idx];
+  }
+  return null;
+}
+
+// Phát hiện file mô tả schema (như UNSW-NB15_features.csv)
+function isSchemaDescriptionFile(columns: string[], rows: DataRow[]): { isSchema: boolean; reason: string } {
+  const schemaIndicators = ["no.", "name", "type", "description", "feature", "description"];
+  const lowerCols = columns.map(c => c.toLowerCase());
+  
+  // Nếu có cột "No." + "Name" + "Description" -> file mô tả
+  const hasNoCol = lowerCols.some(c => c === "no" || c === "no." || c === "#");
+  const hasNameCol = lowerCols.some(c => c === "name" || c === "feature" || c === "feature_name");
+  const hasDescCol = lowerCols.some(c => c.includes("description") || c.includes("desc"));
+  const hasTypeCol = lowerCols.some(c => c === "type" || c === "data_type" || c === "dtype");
+  
+  if (hasNoCol && hasNameCol && (hasDescCol || hasTypeCol)) {
+    return { isSchema: true, reason: "File có cấu trúc mô tả schema (No/Name/Description/Type). Đây không phải dataset thực." };
+  }
+  
+  // Kiểm tra số dòng quá ít + tên cột giống mô tả feature
+  if (rows.length < 100 && rows.length === columns.length) {
+    return { isSchema: true, reason: "File có số dòng bằng số cột - có thể là file mô tả features." };
+  }
+  
+  return { isSchema: false, reason: "" };
+}
+
+// Validate Feature Contract
+function validateFeatureContract(columns: string[]): import("@shared/schema").FeatureValidation {
+  const lowerCols = columns.map(c => c.toLowerCase());
+  const contract = {
+    timing: ["duration", "dur", "time", "timestamp", "start_time", "stime", "ltime"],
+    volume: ["bytes", "sbytes", "dbytes", "totlen_fwd_pkts", "totlen_bwd_pkts", "tot_len", "total_bytes", "bps"],
+    packets: ["packets", "spkts", "dpkts", "tot_fwd_pkts", "tot_bwd_pkts", "total_packets", "pkts", "pps"],
+    network: ["src_ip", "dst_ip", "srcip", "dstip", "saddr", "daddr", "src_port", "dst_port", "sport", "dport"],
+    protocol: ["protocol", "proto", "service", "state", "flags", "tcp_flags"],
+    labels: ["label", "class", "attack", "attack_cat", "category", "target", "is_attack", "ddos"],
+  };
+
+  const hasMatch = (group: string[]) => lowerCols.some(col => group.some(g => col.includes(g)));
+  
+  const hasTimingFeatures = hasMatch(contract.timing);
+  const hasVolumeFeatures = hasMatch(contract.volume);
+  const hasPacketFeatures = hasMatch(contract.packets);
+  const hasNetworkFeatures = hasMatch(contract.network);
+  const hasProtocolFeatures = hasMatch(contract.protocol);
+  const hasLabelColumn = hasMatch(contract.labels);
+  
+  const detectedLabelColumn = findLabelColumn(columns);
+  
+  const missingRequired: string[] = [];
+  if (!hasTimingFeatures) missingRequired.push("timing (duration, timestamp...)");
+  if (!hasVolumeFeatures) missingRequired.push("volume (bytes, bps...)");
+  if (!hasPacketFeatures) missingRequired.push("packets (packets, pps...)");
+  
+  const availableOptional: string[] = [];
+  if (hasNetworkFeatures) availableOptional.push("network (IP/Port)");
+  if (hasProtocolFeatures) availableOptional.push("protocol");
+  if (hasLabelColumn) availableOptional.push("labels");
+  
+  // Tính confidence level
+  let confidenceLevel: "high" | "medium" | "low" = "high";
+  let confidenceReason = "Đầy đủ các features cần thiết";
+  
+  if (missingRequired.length === 0 && hasNetworkFeatures && hasProtocolFeatures) {
+    confidenceLevel = "high";
+    confidenceReason = "Dataset có đầy đủ features: timing, volume, packets, network, protocol";
+  } else if (missingRequired.length <= 1) {
+    confidenceLevel = "medium";
+    confidenceReason = `Thiếu một số features: ${missingRequired.join(", ")}`;
+  } else {
+    confidenceLevel = "low";
+    confidenceReason = `Thiếu nhiều features quan trọng: ${missingRequired.join(", ")}. Kết quả có thể không chính xác.`;
+  }
+  
+  return {
+    hasTimingFeatures,
+    hasVolumeFeatures,
+    hasPacketFeatures,
+    hasNetworkFeatures,
+    hasProtocolFeatures,
+    hasLabelColumn,
+    detectedLabelColumn,
+    missingRequired,
+    availableOptional,
+    confidenceLevel,
+    confidenceReason,
+  };
+}
+
+// Tính toán percentile
+function percentile(arr: number[], p: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = Math.floor((p / 100) * sorted.length);
+  return sorted[Math.min(idx, sorted.length - 1)];
+}
+
+// Tính standard deviation
+function std(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const variance = arr.reduce((sum, x) => sum + Math.pow(x - mean, 2), 0) / arr.length;
+  return Math.sqrt(variance);
 }
 
 function cleanData(rows: DataRow[], columns: string[]): {
@@ -209,6 +363,19 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Không tìm thấy dữ liệu trong file. Hãy đảm bảo file có định dạng CSV hoặc Excel (.xlsx) hợp lệ." });
       }
 
+      // Epic 1.1: Phát hiện file mô tả schema
+      const schemaCheck = isSchemaDescriptionFile(columns, rows);
+      if (schemaCheck.isSchema) {
+        return res.status(400).json({ 
+          error: `File này là mô tả schema/dictionary, không phải dataset thực. ${schemaCheck.reason} Hãy upload file dữ liệu records thực.`,
+          isSchemaFile: true 
+        });
+      }
+
+      // Epic 1.2: Validate Feature Contract và chọn Mode
+      const featureValidation = validateFeatureContract(columns);
+      const mode: import("@shared/schema").DetectionMode = featureValidation.hasLabelColumn ? "supervised" : "unlabeled";
+
       const { cleanedRows, missingValues, duplicates, outliers } = cleanData(rows, columns);
 
       const dataset: Dataset = {
@@ -219,6 +386,9 @@ export async function registerRoutes(
         columns,
         uploadedAt: new Date().toISOString(),
         isProcessed: true,
+        mode,  // Thêm mode vào dataset
+        labelColumn: featureValidation.detectedLabelColumn || undefined,
+        featureValidation,  // Thêm feature validation
         dataQuality: {
           missingValues,
           duplicates,
@@ -233,13 +403,35 @@ export async function registerRoutes(
       await storage.clearResults();
 
       (global as any).__datasetRows = cleanedRows;
+      (global as any).__datasetMode = mode;
 
-      const hasLabel = hasLabelColumn(columns);
-      const warning = hasLabel 
-        ? undefined 
-        : "Cảnh báo: Không tìm thấy cột label (như 'label', 'class', 'attack'). Kết quả phân tích có thể không chính xác.";
+      // Tạo warnings dựa trên validation
+      const warnings: string[] = [];
+      
+      if (mode === "unlabeled") {
+        warnings.push("🔍 Mode: UNLABELED - Không tìm thấy cột label. Sẽ chạy inference và hiển thị score/cảnh báo thay vì accuracy.");
+      } else {
+        warnings.push(`✓ Mode: SUPERVISED - Phát hiện cột label: "${featureValidation.detectedLabelColumn}". Sẽ train và đánh giá chuẩn.`);
+      }
+      
+      if (featureValidation.missingRequired.length > 0) {
+        warnings.push(`⚠️ Thiếu features quan trọng: ${featureValidation.missingRequired.join(", ")}. ${featureValidation.confidenceReason}`);
+      }
+      
+      if (featureValidation.confidenceLevel === "low") {
+        warnings.push("⚠️ Độ tin cậy THẤP: Dataset thiếu nhiều features cần thiết cho phát hiện DDoS chính xác.");
+      }
 
-      res.json({ dataset, previewData, warning });
+      res.json({ 
+        dataset, 
+        previewData, 
+        warning: warnings.join(" | "),
+        validationResult: {
+          mode,
+          featureValidation,
+          confidenceLevel: featureValidation.confidenceLevel,
+        }
+      });
     } catch (error) {
       console.error("Upload error:", error);
       res.status(500).json({ error: "Failed to process dataset" });
@@ -275,14 +467,36 @@ export async function registerRoutes(
       }
 
       const featureColumns = getFeatureColumns(datasetData.dataset.columns);
+      const mode = datasetData.dataset.mode || "supervised";
 
       await storage.clearResults();
 
       const results = [];
       for (const modelType of modelTypes) {
         const result = await analyzeWithModel(datasetId, modelType, allRows, featureColumns);
-        await storage.addResult(result);
-        results.push(result);
+        
+        // Add mode to result
+        const resultWithMode = {
+          ...result,
+          mode,
+        };
+        
+        // Add unlabeled report if unlabeled mode
+        if (mode === "unlabeled") {
+          const { features } = extractFeaturesForReport(allRows, featureColumns);
+          const normalizedFeatures = normalizeForReport(features);
+          const { scores, alertRate } = runAnomalyDetection(normalizedFeatures);
+          
+          resultWithMode.unlabeledReport = generateUnlabeledReport(
+            allRows,
+            datasetData.dataset.columns,
+            features,
+            scores
+          );
+        }
+        
+        await storage.addResult(resultWithMode);
+        results.push(resultWithMode);
       }
 
       res.json(results);

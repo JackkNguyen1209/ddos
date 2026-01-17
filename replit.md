@@ -7,9 +7,15 @@ A machine learning application for detecting DDoS (Distributed Denial of Service
 ### Key Features
 - **Multi-format support**: CSV and Excel (.xlsx, .xls) file upload up to 50MB
 - **6 ML algorithms**: Including LUCID-inspired Neural Network with convolution filters
-- **Attack type classification**: Detects Port Scan, SYN Flood, UDP Flood, ICMP Flood, HTTP Flood, DNS/NTP/LDAP/RDP attacks
+- **Attack type classification**: Detects 17+ attack types across 7 categories (reconnaissance, bruteforce, remote_access, volumetric, amplification, application_layer, protocol_exploit)
 - **Vietnamese UI**: Full Vietnamese language interface
 - **Detailed explanations**: Formula-based detection with algorithm explanations
+- **Dual Mode Detection**:
+  - **Supervised Mode**: When dataset has labels → train/evaluate with Accuracy/Precision/Recall/F1
+  - **Unlabeled Inference Mode**: When no labels → runs anomaly detection (IsolationForest, LOF) and shows scores/alerts instead of fake accuracy
+- **Feature Contract**: Auto-validates required features (timing, volume, packets) and optional features (network, protocol, labels)
+- **Schema Detection**: Auto-detects if uploaded file is a schema/dictionary description vs actual data
+- **Data Quality Reports**: Missing rate, invalid values, valid rows count for unlabeled data
 
 ## User Preferences
 

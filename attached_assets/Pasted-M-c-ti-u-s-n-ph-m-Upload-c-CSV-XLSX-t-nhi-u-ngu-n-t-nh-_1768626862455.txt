@@ -1,0 +1,150 @@
+Mục tiêu sản phẩm
+
+Upload được CSV/XLSX từ nhiều nguồn, tự nhận diện loại dữ liệu và chạy đúng chế độ:
+
+Supervised mode: khi có nhãn (label/attack category) → train/evaluate chuẩn.
+
+Unlabeled inference mode: khi không có nhãn → vẫn detect (ra score/cảnh báo), không hiển thị accuracy giả.
+
+Giảm phụ thuộc vào IP/port bằng cách dựa vào flow/behavior features (pps/bps/IAT/duration/packet-length stats…).
+
+Epic 1 — Ingestion & Data Validation (bắt lỗi upload “nhầm loại file”)
+1.1 Auto-detect loại file
+
+Nếu file giống “data dictionary” (ví dụ UNSW *_features.csv chỉ mô tả feature) → chặn và hướng dẫn upload file records thực. (UNSW mô tả 49 features + class label, và file UNSW-NB15_features.csv là mô tả feature).
+Acceptance: tool báo rõ “file mô tả schema, không phải dataset”.
+
+1.2 Schema scan & mode selection
+
+Quét cột:
+
+Nếu có label/attack_cat (hoặc user chọn từ dropdown) → Supervised mode.
+
+Nếu không có label → Unlabeled inference mode.
+Acceptance: UI hiển thị rõ “Mode: Supervised / Unlabeled”.
+
+1.3 Column mapping UI
+
+Cho phép user map cột theo “Feature Contract” (tên khác nhau giữa các đơn vị).
+Acceptance: map xong lưu được “profile mapping” cho từng đơn vị.
+
+Epic 2 — Chuẩn hoá feature đầu vào (không cần IP/port vẫn chạy)
+2.1 Thiết kế “Feature Contract”
+
+Định nghĩa:
+
+Required features (tối thiểu để detect): nhóm timing/volume/metadata.
+
+Optional features: flags, protocol breakdown…
+
+Khi thiếu required → cảnh báo “độ tin cậy thấp / không đủ dữ liệu”.
+Acceptance: có report “Missing/Extra columns”.
+
+2.2 Module trích xuất flow features (khuyến nghị có)
+
+Để các đơn vị xuất dữ liệu không đồng nhất, thêm 1 trong 2 pipeline chuẩn hoá:
+
+CICFlowMeter: tạo biflow từ PCAP và trích xuất feature theo flow.
+
+Zeek FlowMeter (Zeek script, port từ CICFlowMeter): tạo feature theo timing/volume/metadata để train classification mà không cần deep packet inspection.
+
+Acceptance: tool có thể nhận PCAP → features (nếu bạn chọn hỗ trợ PCAP), hoặc validate dataset đã là features theo contract.
+
+Epic 3 — Preprocessing pipeline “chuẩn hoá để model dùng lại được”
+
+Xử lý: NaN/Inf, kiểu dữ liệu, clipping outliers cơ bản.
+
+Scaling/normalization theo đúng pipeline đã train.
+
+Lưu toàn bộ preprocessing dưới dạng “pipeline artifact” đi kèm model.
+Acceptance: cùng 1 file upload chạy ra kết quả ổn định giữa các lần, không phụ thuộc máy.
+
+Epic 4 — Unlabeled Inference Mode (không có nhãn vẫn detect)
+4.1 Lõi: Pretrained supervised model (đã train từ dataset có nhãn)
+
+Train trước bằng UNSW-NB15 / CIC*…, export model + pipeline.
+
+Khi upload unlabeled: chỉ chạy predict_proba/score.
+
+UNSW-NB15: features được trích xuất bằng Argus + Bro-IDS và có class label (cơ sở để bạn train supervised trước).
+
+4.2 Lớp phụ: Anomaly/novelty detector để bắt “lạ phân phối”
+
+Bổ sung 1 model unsupervised/semi-supervised để hỗ trợ khi dữ liệu từ đơn vị khác lệch so với train:
+
+Tổng quan phân biệt outlier detection vs novelty detection (sklearn guide).
+
+Gợi ý implement:
+
+IsolationForest cho anomaly score (tính “normality” theo cơ chế isolate).
+
+Local Outlier Factor (LOF) (có ví dụ cả outlier & novelty).
+
+OneClassSVM cho novelty detection (nhưng nhạy outliers hơn, dùng kèm cảnh báo).
+
+Acceptance: kết quả inference trả về ít nhất:
+
+ddos_probability (supervised)
+
+anomaly_score (unsupervised)
+
+final_alert theo rule kết hợp (ví dụ OR / weighted score).
+
+Epic 5 — “Đánh giá” khi không có nhãn (thay vì accuracy giả)
+
+Khi unlabeled:
+
+Confidence report: phân phối score, tỷ lệ cảnh báo theo thời gian/window.
+
+Drift/OOD report: so thống kê feature upload vs train baseline (PSI/percentile shift).
+
+Data quality report: missing rate, invalid values.
+
+Acceptance: UI không hiển thị Accuracy/F1 khi unlabeled; thay bằng 3 report trên + cảnh báo độ tin cậy.
+
+Epic 6 — Weak supervision để “học thêm” từ dữ liệu không nhãn (tuỳ chọn nhưng rất đáng làm)
+
+Mục tiêu: các đơn vị gửi data không nhãn → tool vẫn dần tốt lên.
+
+6.1 Rule engine + labeling functions
+
+Cho phép đội vận hành định nghĩa rule (pps/bps/IAT/burstiness…) → trả label hoặc abstain.
+
+Có “rule management UI” + versioning.
+
+6.2 Tổng hợp nhãn yếu (denoise) + retrain
+
+Tích hợp cách làm kiểu Snorkel: labeling functions tạo weak labels và có LabelModel để tổng hợp/denoise.
+
+Hoặc tích hợp Argilla Weak Supervision để apply rules và quản lý weak labels trong workflow.
+
+Acceptance:
+
+Tạo được “pseudo-labeled dataset” có confidence.
+
+Retrain được model (offline job) và đưa model mới vào registry.
+
+Epic 7 — MLOps tối thiểu (để vận hành được với nhiều đơn vị)
+
+Model registry: version model + preprocessing + feature contract.
+
+Audit logs: file upload metadata, schema mapping used, model version, score stats.
+
+Threshold management theo từng đơn vị (vì môi trường khác nhau).
+Acceptance: truy xuất được “vì sao alert” theo từng lần chạy.
+
+Deliverables đề xuất cho đội dev (ngắn gọn để giao việc)
+
+Spec “Feature Contract v1” + schema mapping UI.
+
+Ingestion validator: nhận diện nhầm file schema/dictionary, detect label, chọn mode.
+
+Inference engine:
+
+pretrained supervised model
+
+IsolationForest/LOF/OneClassSVM anomaly scoring
+
+Unlabeled reporting: data quality + drift + score distribution.
+
+(Tuỳ chọn) Weak supervision module: rules + (Snorkel/Argilla) label aggregation + retrain pipeline.

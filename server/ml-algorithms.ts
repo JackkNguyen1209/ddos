@@ -899,7 +899,7 @@ export async function analyzeWithModel(
 }
 
 export function getFeatureColumns(columns: string[]): string[] {
-  const labelColumns = ["label", "class", "attack", "target", "Label", "Class", "Attack", "Target"];
+  const labelColumns = ["label", "class", "attack", "target", "Label", "Class", "Attack", "Target", "attack_cat", "category"];
   const idColumns = ["id", "ID", "Id", "index", "Index"];
   
   return columns.filter(
@@ -907,6 +907,272 @@ export function getFeatureColumns(columns: string[]): string[] {
       !labelColumns.includes(col) &&
       !idColumns.includes(col)
   );
+}
+
+// ============== ANOMALY DETECTION ALGORITHMS (Epic 4) ==============
+
+// Isolation Forest - Anomaly Detection
+class IsolationForest {
+  private trees: IsolationTree[] = [];
+  private numTrees: number;
+  private sampleSize: number;
+  
+  constructor(numTrees: number = 100, sampleSize: number = 256) {
+    this.numTrees = numTrees;
+    this.sampleSize = sampleSize;
+  }
+  
+  fit(data: number[][]): void {
+    this.trees = [];
+    for (let i = 0; i < this.numTrees; i++) {
+      const sample = this.subsample(data, Math.min(this.sampleSize, data.length));
+      const tree = new IsolationTree();
+      tree.fit(sample, 0, Math.ceil(Math.log2(this.sampleSize)));
+      this.trees.push(tree);
+    }
+  }
+  
+  private subsample(data: number[][], size: number): number[][] {
+    const indices = new Set<number>();
+    while (indices.size < size) {
+      indices.add(Math.floor(Math.random() * data.length));
+    }
+    return Array.from(indices).map(i => data[i]);
+  }
+  
+  predict(data: number[][]): number[] {
+    return data.map(point => this.anomalyScore(point));
+  }
+  
+  private anomalyScore(point: number[]): number {
+    const avgPathLength = this.trees.reduce((sum, tree) => sum + tree.pathLength(point, 0), 0) / this.trees.length;
+    const c = this.expectedPathLength(this.sampleSize);
+    return Math.pow(2, -avgPathLength / c);
+  }
+  
+  private expectedPathLength(n: number): number {
+    if (n <= 1) return 0;
+    if (n === 2) return 1;
+    const H = Math.log(n - 1) + 0.5772156649;
+    return 2 * H - (2 * (n - 1) / n);
+  }
+}
+
+class IsolationTree {
+  private splitFeature: number = 0;
+  private splitValue: number = 0;
+  private left: IsolationTree | null = null;
+  private right: IsolationTree | null = null;
+  private isLeaf: boolean = true;
+  private size: number = 0;
+  
+  fit(data: number[][], depth: number, maxDepth: number): void {
+    this.size = data.length;
+    
+    if (depth >= maxDepth || data.length <= 1) {
+      this.isLeaf = true;
+      return;
+    }
+    
+    const numFeatures = data[0].length;
+    this.splitFeature = Math.floor(Math.random() * numFeatures);
+    
+    const featureValues = data.map(row => row[this.splitFeature]);
+    const minVal = Math.min(...featureValues);
+    const maxVal = Math.max(...featureValues);
+    
+    if (minVal === maxVal) {
+      this.isLeaf = true;
+      return;
+    }
+    
+    this.splitValue = minVal + Math.random() * (maxVal - minVal);
+    this.isLeaf = false;
+    
+    const leftData = data.filter(row => row[this.splitFeature] < this.splitValue);
+    const rightData = data.filter(row => row[this.splitFeature] >= this.splitValue);
+    
+    if (leftData.length > 0) {
+      this.left = new IsolationTree();
+      this.left.fit(leftData, depth + 1, maxDepth);
+    }
+    
+    if (rightData.length > 0) {
+      this.right = new IsolationTree();
+      this.right.fit(rightData, depth + 1, maxDepth);
+    }
+  }
+  
+  pathLength(point: number[], currentDepth: number): number {
+    if (this.isLeaf) {
+      return currentDepth + this.expectedPathLength(this.size);
+    }
+    
+    if (point[this.splitFeature] < this.splitValue) {
+      return this.left ? this.left.pathLength(point, currentDepth + 1) : currentDepth + 1;
+    } else {
+      return this.right ? this.right.pathLength(point, currentDepth + 1) : currentDepth + 1;
+    }
+  }
+  
+  private expectedPathLength(n: number): number {
+    if (n <= 1) return 0;
+    if (n === 2) return 1;
+    const H = Math.log(n - 1) + 0.5772156649;
+    return 2 * H - (2 * (n - 1) / n);
+  }
+}
+
+// Local Outlier Factor (LOF)
+class LocalOutlierFactor {
+  private k: number;
+  private data: number[][] = [];
+  
+  constructor(k: number = 20) {
+    this.k = k;
+  }
+  
+  fit(data: number[][]): void {
+    this.data = data;
+  }
+  
+  predict(data: number[][]): number[] {
+    return data.map(point => this.lofScore(point));
+  }
+  
+  private euclideanDistance(a: number[], b: number[]): number {
+    return Math.sqrt(a.reduce((sum, val, i) => sum + Math.pow(val - (b[i] || 0), 2), 0));
+  }
+  
+  private getKNeighbors(point: number[]): { distances: number[]; indices: number[] } {
+    const distances = this.data.map((p, i) => ({
+      distance: this.euclideanDistance(point, p),
+      index: i
+    }));
+    
+    distances.sort((a, b) => a.distance - b.distance);
+    const kNearest = distances.slice(0, this.k);
+    
+    return {
+      distances: kNearest.map(d => d.distance),
+      indices: kNearest.map(d => d.index)
+    };
+  }
+  
+  private reachabilityDistance(point: number[], neighborIdx: number): number {
+    const neighborNeighbors = this.getKNeighbors(this.data[neighborIdx]);
+    const kDistance = neighborNeighbors.distances[this.k - 1] || neighborNeighbors.distances[neighborNeighbors.distances.length - 1] || 0.001;
+    const distance = this.euclideanDistance(point, this.data[neighborIdx]);
+    return Math.max(kDistance, distance);
+  }
+  
+  private localReachabilityDensity(point: number[]): number {
+    const neighbors = this.getKNeighbors(point);
+    if (neighbors.indices.length === 0) return 1;
+    
+    const avgReachDist = neighbors.indices.reduce((sum, idx) => 
+      sum + this.reachabilityDistance(point, idx), 0) / neighbors.indices.length;
+    
+    return avgReachDist > 0 ? 1 / avgReachDist : 1;
+  }
+  
+  private lofScore(point: number[]): number {
+    const neighbors = this.getKNeighbors(point);
+    if (neighbors.indices.length === 0) return 1;
+    
+    const pointLrd = this.localReachabilityDensity(point);
+    if (pointLrd === 0) return 1;
+    
+    const avgNeighborLrd = neighbors.indices.reduce((sum, idx) => 
+      sum + this.localReachabilityDensity(this.data[idx]), 0) / neighbors.indices.length;
+    
+    return avgNeighborLrd / pointLrd;
+  }
+}
+
+// Anomaly detection cho Unlabeled mode
+export function runAnomalyDetection(
+  features: number[][],
+  threshold: number = 0.5
+): { scores: number[]; isAnomalous: boolean[]; avgScore: number; alertRate: number } {
+  // Isolation Forest
+  const isoForest = new IsolationForest(50, Math.min(256, features.length));
+  isoForest.fit(features);
+  const isoScores = isoForest.predict(features);
+  
+  // LOF (chỉ chạy với sample nhỏ để tối ưu performance)
+  const sampleSize = Math.min(500, features.length);
+  const lof = new LocalOutlierFactor(Math.min(10, Math.floor(sampleSize / 10)));
+  const sampleFeatures = features.slice(0, sampleSize);
+  lof.fit(sampleFeatures);
+  
+  // Combine scores
+  const scores = isoScores.map((isoScore, i) => {
+    // Normalize LOF để scale tương tự Isolation Forest
+    const lofIdx = i < sampleSize ? i : Math.floor(Math.random() * sampleSize);
+    const lofScoreNorm = Math.min(1, Math.max(0, (lof.predict([features[lofIdx]])[0] - 1) / 2));
+    return (isoScore * 0.7 + lofScoreNorm * 0.3);
+  });
+  
+  const isAnomalous = scores.map(s => s > threshold);
+  const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const alertRate = isAnomalous.filter(Boolean).length / isAnomalous.length;
+  
+  return { scores, isAnomalous, avgScore, alertRate };
+}
+
+// Unlabeled inference report generation
+export function generateUnlabeledReport(
+  data: DataRow[],
+  columns: string[],
+  features: number[][],
+  anomalyScores: number[]
+): import("@shared/schema").AnalysisResult["unlabeledReport"] {
+  // Score distribution
+  const sortedScores = [...anomalyScores].sort((a, b) => a - b);
+  const mean = anomalyScores.reduce((a, b) => a + b, 0) / anomalyScores.length;
+  const variance = anomalyScores.reduce((sum, s) => sum + Math.pow(s - mean, 2), 0) / anomalyScores.length;
+  
+  // Data quality
+  let missingCount = 0;
+  let invalidCount = 0;
+  for (const row of data) {
+    for (const col of columns) {
+      const val = row[col];
+      if (val === null || val === undefined || val === "") {
+        missingCount++;
+      } else if (typeof val === "number" && (isNaN(val) || !isFinite(val))) {
+        invalidCount++;
+      }
+    }
+  }
+  
+  const totalCells = data.length * columns.length;
+  
+  return {
+    scoreDistribution: {
+      min: sortedScores[0] || 0,
+      max: sortedScores[sortedScores.length - 1] || 0,
+      mean,
+      std: Math.sqrt(variance),
+      percentiles: {
+        p25: sortedScores[Math.floor(sortedScores.length * 0.25)] || 0,
+        p50: sortedScores[Math.floor(sortedScores.length * 0.50)] || 0,
+        p75: sortedScores[Math.floor(sortedScores.length * 0.75)] || 0,
+        p90: sortedScores[Math.floor(sortedScores.length * 0.90)] || 0,
+        p95: sortedScores[Math.floor(sortedScores.length * 0.95)] || 0,
+      },
+    },
+    alertRate: anomalyScores.filter(s => s > 0.5).length / anomalyScores.length,
+    dataQuality: {
+      missingRate: totalCells > 0 ? missingCount / totalCells : 0,
+      invalidValues: invalidCount,
+      totalRows: data.length,
+      validRows: data.filter(row => 
+        columns.every(col => row[col] !== null && row[col] !== undefined)
+      ).length,
+    },
+  };
 }
 
 const FEATURE_DESCRIPTIONS: Record<string, string> = {

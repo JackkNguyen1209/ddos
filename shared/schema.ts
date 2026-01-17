@@ -1,5 +1,87 @@
 import { z } from "zod";
 
+// Detection Mode - Supervised (có nhãn) vs Unlabeled (không có nhãn)
+export const detectionModes = ["supervised", "unlabeled"] as const;
+export type DetectionMode = typeof detectionModes[number];
+
+// Feature Contract - Định nghĩa các feature cần thiết
+export const FEATURE_CONTRACT = {
+  // Required features - cần ít nhất 1 từ mỗi nhóm để phân tích có ý nghĩa
+  required: {
+    timing: ["duration", "dur", "time", "timestamp", "start_time", "stime", "ltime"],
+    volume: ["bytes", "sbytes", "dbytes", "totlen_fwd_pkts", "totlen_bwd_pkts", "tot_len", "total_bytes", "bps", "pps"],
+    packets: ["packets", "spkts", "dpkts", "tot_fwd_pkts", "tot_bwd_pkts", "total_packets", "pkts"],
+  },
+  // Optional features - bổ sung thêm thông tin
+  optional: {
+    network: ["src_ip", "dst_ip", "srcip", "dstip", "saddr", "daddr", "src_port", "dst_port", "sport", "dport"],
+    protocol: ["protocol", "proto", "service", "state", "flags", "tcp_flags"],
+    statistics: ["mean", "std", "var", "min", "max", "iat", "psh", "urg", "fin", "syn", "rst", "ack"],
+    labels: ["label", "class", "attack", "attack_cat", "category", "target", "is_attack", "ddos"],
+  }
+} as const;
+
+// Feature validation result
+export interface FeatureValidation {
+  hasTimingFeatures: boolean;
+  hasVolumeFeatures: boolean;
+  hasPacketFeatures: boolean;
+  hasNetworkFeatures: boolean;
+  hasProtocolFeatures: boolean;
+  hasLabelColumn: boolean;
+  detectedLabelColumn: string | null;
+  missingRequired: string[];
+  availableOptional: string[];
+  confidenceLevel: "high" | "medium" | "low";
+  confidenceReason: string;
+}
+
+// Data validation result - phát hiện loại file
+export interface DataValidationResult {
+  isSchemaFile: boolean;           // File mô tả schema/dictionary
+  isValidDataset: boolean;         // File dữ liệu hợp lệ
+  mode: DetectionMode;             // Supervised hoặc Unlabeled
+  featureValidation: FeatureValidation;
+  warnings: string[];
+  errors: string[];
+}
+
+// Anomaly Detection Result - cho Unlabeled mode
+export interface AnomalyResult {
+  isolationForestScore: number;    // Anomaly score từ Isolation Forest
+  lofScore: number;                // Local Outlier Factor score
+  combinedAnomalyScore: number;    // Score kết hợp
+  isAnomaly: boolean;              // Kết luận có phải anomaly không
+}
+
+// Unlabeled Inference Report
+export interface UnlabeledReport {
+  // Confidence Report
+  scoreDistribution: {
+    min: number;
+    max: number;
+    mean: number;
+    std: number;
+    percentiles: { p25: number; p50: number; p75: number; p90: number; p95: number };
+  };
+  alertRate: number;               // Tỷ lệ cảnh báo
+  
+  // Data Quality Report
+  dataQuality: {
+    missingRate: number;
+    invalidValues: number;
+    totalRows: number;
+    validRows: number;
+  };
+  
+  // Drift Detection (so với baseline)
+  driftReport?: {
+    featureShifts: { feature: string; shift: number; severity: "low" | "medium" | "high" }[];
+    overallDrift: number;
+    isDistributionShifted: boolean;
+  };
+}
+
 // Dataset schema
 export const datasetSchema = z.object({
   id: z.string(),
@@ -9,6 +91,9 @@ export const datasetSchema = z.object({
   columns: z.array(z.string()),
   uploadedAt: z.string(),
   isProcessed: z.boolean(),
+  mode: z.enum(detectionModes).optional(),  // Thêm mode
+  labelColumn: z.string().optional(),       // Cột label được phát hiện
+  featureValidation: z.any().optional(),    // Feature validation result
   dataQuality: z.object({
     missingValues: z.number(),
     duplicates: z.number(),
@@ -401,6 +486,7 @@ export const analysisResultSchema = z.object({
   id: z.string(),
   datasetId: z.string(),
   modelType: z.enum(mlModelTypes),
+  mode: z.enum(detectionModes).optional(),  // Supervised hoặc Unlabeled
   accuracy: z.number(),
   precision: z.number(),
   recall: z.number(),
@@ -425,6 +511,34 @@ export const analysisResultSchema = z.object({
     flowFeatures: z.number(),
     anomalyScore: z.number(),
     confidence: z.number(),
+  }).optional(),
+  // Unlabeled mode fields
+  unlabeledReport: z.object({
+    scoreDistribution: z.object({
+      min: z.number(),
+      max: z.number(),
+      mean: z.number(),
+      std: z.number(),
+      percentiles: z.object({
+        p25: z.number(),
+        p50: z.number(),
+        p75: z.number(),
+        p90: z.number(),
+        p95: z.number(),
+      }),
+    }),
+    alertRate: z.number(),
+    dataQuality: z.object({
+      missingRate: z.number(),
+      invalidValues: z.number(),
+      totalRows: z.number(),
+      validRows: z.number(),
+    }),
+    anomalyScores: z.object({
+      isolationForest: z.number(),
+      lof: z.number(),
+      combined: z.number(),
+    }).optional(),
   }).optional(),
 });
 

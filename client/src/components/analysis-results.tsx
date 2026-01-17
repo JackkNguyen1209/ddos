@@ -1,4 +1,4 @@
-import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle, Info, Zap, BookOpen, CheckCircle2, XCircle, Lightbulb, Calculator, ListOrdered, Settings } from "lucide-react";
+import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle, Info, Zap, BookOpen, CheckCircle2, XCircle, Lightbulb, ListOrdered, Settings, Hash } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -21,7 +21,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { ML_MODELS, ALGORITHM_DETAILS, ATTACK_TYPE_INFO, ATTACK_CATEGORY_INFO, type AnalysisResult, type AttackTypeResult, type AttackCategory } from "@shared/schema";
+import { ML_MODELS, ALGORITHM_DETAILS, ATTACK_TYPE_INFO, ATTACK_CATEGORY_INFO, type AnalysisResult, type AttackTypeResult, type AttackCategory, type DetectionMode } from "@shared/schema";
 
 interface AnalysisResultsProps {
   results: AnalysisResult[];
@@ -32,14 +32,22 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
     return null;
   }
 
-  const sortedByAccuracy = [...results].sort((a, b) => b.accuracy - a.accuracy);
-  const bestModel = sortedByAccuracy[0];
+  // Detect mode from results
+  const mode: DetectionMode = results[0]?.mode || "supervised";
+  const isUnlabeled = mode === "unlabeled";
 
   const getModelName = (type: string) => {
     return ML_MODELS.find((m) => m.type === type)?.name || type;
   };
 
-  const comparisonData = results.map((r) => ({
+  // For unlabeled mode: use first result (no ranking by accuracy)
+  // For supervised mode: sort by accuracy and pick best
+  const bestModel = isUnlabeled 
+    ? results[0] 
+    : [...results].sort((a, b) => b.accuracy - a.accuracy)[0];
+
+  // Supervised mode comparison data
+  const comparisonData = isUnlabeled ? [] : results.map((r) => ({
     name: getModelName(r.modelType),
     accuracy: (r.accuracy * 100).toFixed(1),
     precision: (r.precision * 100).toFixed(1),
@@ -47,22 +55,46 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
     f1Score: (r.f1Score * 100).toFixed(1),
   }));
 
-  const radarData = [
+  // Supervised mode radar data
+  const radarData = isUnlabeled ? [] : [
     { metric: "Accuracy", ...Object.fromEntries(results.map((r) => [getModelName(r.modelType), r.accuracy * 100])) },
     { metric: "Precision", ...Object.fromEntries(results.map((r) => [getModelName(r.modelType), r.precision * 100])) },
     { metric: "Recall", ...Object.fromEntries(results.map((r) => [getModelName(r.modelType), r.recall * 100])) },
     { metric: "F1 Score", ...Object.fromEntries(results.map((r) => [getModelName(r.modelType), r.f1Score * 100])) },
   ];
 
+  // Unlabeled mode comparison data
+  const unlabeledComparisonData = isUnlabeled ? results.map((r) => ({
+    name: getModelName(r.modelType),
+    alertRate: r.unlabeledReport?.alertRate ? (r.unlabeledReport.alertRate * 100).toFixed(1) : ((r.ddosDetected / (r.ddosDetected + r.normalTraffic)) * 100).toFixed(1),
+    anomalyScore: r.unlabeledReport?.scoreDistribution?.mean ? (r.unlabeledReport.scoreDistribution.mean * 100).toFixed(1) : "0",
+    validRows: r.unlabeledReport?.dataQuality?.validRows || r.normalTraffic,
+  })) : [];
+
   const colors = ["hsl(200, 90%, 45%)", "hsl(160, 60%, 45%)", "hsl(45, 93%, 47%)", "hsl(280, 65%, 60%)", "hsl(340, 75%, 55%)"];
 
   return (
     <div className="space-y-6">
+      {isUnlabeled && (
+        <Card className="border-blue-500/50 bg-blue-500/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-blue-700">
+              <Info className="h-5 w-5" />
+              Mode: UNLABELED INFERENCE
+            </CardTitle>
+            <CardDescription>
+              Dataset không có cột label. Kết quả hiển thị Anomaly Score thay vì Accuracy/Precision/Recall.
+              Các số liệu bên dưới là ước tính dựa trên phân bố dữ liệu, không phải đánh giá chuẩn.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+      
       <Card className="border-primary/50 bg-primary/5">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Trophy className="h-5 w-5 text-chart-3" />
-            Mô Hình Tốt Nhất
+            {isUnlabeled ? "Kết Quả Inference" : "Mô Hình Tốt Nhất"}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -75,36 +107,78 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
                 <div>
                   <h3 className="text-xl font-bold">{getModelName(bestModel.modelType)}</h3>
                   <p className="text-sm text-muted-foreground">
-                    Độ chính xác cao nhất trong các mô hình đã phân tích
+                    {isUnlabeled 
+                      ? "Inference mode - Hiển thị anomaly score và cảnh báo" 
+                      : "Độ chính xác cao nhất trong các mô hình đã phân tích"}
                   </p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <MetricCard
-                  label="Accuracy"
-                  value={bestModel.accuracy}
-                  icon={<Target className="h-4 w-4" />}
-                  color="chart-1"
-                />
-                <MetricCard
-                  label="Precision"
-                  value={bestModel.precision}
-                  icon={<Shield className="h-4 w-4" />}
-                  color="chart-2"
-                />
-                <MetricCard
-                  label="Recall"
-                  value={bestModel.recall}
-                  icon={<BarChart3 className="h-4 w-4" />}
-                  color="chart-4"
-                />
-                <MetricCard
-                  label="F1 Score"
-                  value={bestModel.f1Score}
-                  icon={<Target className="h-4 w-4" />}
-                  color="chart-5"
-                />
-              </div>
+              
+              {isUnlabeled ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="rounded-lg bg-blue-500/10 p-4 text-center">
+                    <Target className="h-6 w-6 text-blue-600 mx-auto mb-2" />
+                    <p className="text-2xl font-bold text-blue-600">
+                      {bestModel.unlabeledReport?.alertRate 
+                        ? (bestModel.unlabeledReport.alertRate * 100).toFixed(1) 
+                        : ((bestModel.ddosDetected / (bestModel.ddosDetected + bestModel.normalTraffic)) * 100).toFixed(1)}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">Alert Rate</p>
+                  </div>
+                  <div className="rounded-lg bg-orange-500/10 p-4 text-center">
+                    <AlertTriangle className="h-6 w-6 text-orange-600 mx-auto mb-2" />
+                    <p className="text-2xl font-bold text-orange-600">
+                      {bestModel.unlabeledReport?.scoreDistribution?.mean 
+                        ? (bestModel.unlabeledReport.scoreDistribution.mean * 100).toFixed(1) 
+                        : "N/A"}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">Avg Anomaly Score</p>
+                  </div>
+                  <div className="rounded-lg bg-green-500/10 p-4 text-center">
+                    <CheckCircle2 className="h-6 w-6 text-green-600 mx-auto mb-2" />
+                    <p className="text-2xl font-bold text-green-600">
+                      {bestModel.unlabeledReport?.dataQuality?.validRows?.toLocaleString() || bestModel.normalTraffic.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Valid Rows</p>
+                  </div>
+                  <div className="rounded-lg bg-purple-500/10 p-4 text-center">
+                    <Info className="h-6 w-6 text-purple-600 mx-auto mb-2" />
+                    <p className="text-2xl font-bold text-purple-600">
+                      {bestModel.unlabeledReport?.dataQuality?.missingRate 
+                        ? (bestModel.unlabeledReport.dataQuality.missingRate * 100).toFixed(1) 
+                        : "0"}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">Missing Rate</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-4">
+                  <MetricCard
+                    label="Accuracy"
+                    value={bestModel.accuracy}
+                    icon={<Target className="h-4 w-4" />}
+                    color="chart-1"
+                  />
+                  <MetricCard
+                    label="Precision"
+                    value={bestModel.precision}
+                    icon={<Shield className="h-4 w-4" />}
+                    color="chart-2"
+                  />
+                  <MetricCard
+                    label="Recall"
+                    value={bestModel.recall}
+                    icon={<BarChart3 className="h-4 w-4" />}
+                    color="chart-4"
+                  />
+                  <MetricCard
+                    label="F1 Score"
+                    value={bestModel.f1Score}
+                    icon={<Target className="h-4 w-4" />}
+                    color="chart-5"
+                  />
+                </div>
+              )}
             </div>
             <div className="flex-1">
               <div className="flex items-center justify-between mb-2">
@@ -158,57 +232,100 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
             </TabsContent>
 
             <TabsContent value="comparison" className="space-y-4">
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={comparisonData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                    <XAxis dataKey="name" className="text-xs" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
-                    <YAxis domain={[0, 100]} className="text-xs" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: 'hsl(var(--card))',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '0.5rem',
-                      }}
-                    />
-                    <Legend />
-                    <Bar dataKey="accuracy" name="Accuracy %" fill="hsl(200, 90%, 45%)" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="precision" name="Precision %" fill="hsl(160, 60%, 45%)" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="recall" name="Recall %" fill="hsl(45, 93%, 47%)" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="f1Score" name="F1 Score %" fill="hsl(280, 65%, 60%)" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              {isUnlabeled ? (
+                <div className="space-y-4">
+                  <div className="p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">
+                    <p className="text-sm text-blue-700 dark:text-blue-300 flex items-center gap-2">
+                      <Info className="h-4 w-4" />
+                      Unlabeled Mode: Hiển thị Alert Rate và Anomaly Score thay vì Accuracy/Precision/Recall
+                    </p>
+                  </div>
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={unlabeledComparisonData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                        <XAxis dataKey="name" className="text-xs" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                        <YAxis domain={[0, 100]} className="text-xs" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: 'hsl(var(--card))',
+                            border: '1px solid hsl(var(--border))',
+                            borderRadius: '0.5rem',
+                          }}
+                        />
+                        <Legend />
+                        <Bar dataKey="alertRate" name="Alert Rate %" fill="hsl(200, 90%, 45%)" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="anomalyScore" name="Anomaly Score %" fill="hsl(340, 75%, 55%)" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              ) : (
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={comparisonData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                      <XAxis dataKey="name" className="text-xs" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                      <YAxis domain={[0, 100]} className="text-xs" tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: 'hsl(var(--card))',
+                          border: '1px solid hsl(var(--border))',
+                          borderRadius: '0.5rem',
+                        }}
+                      />
+                      <Legend />
+                      <Bar dataKey="accuracy" name="Accuracy %" fill="hsl(200, 90%, 45%)" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="precision" name="Precision %" fill="hsl(160, 60%, 45%)" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="recall" name="Recall %" fill="hsl(45, 93%, 47%)" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="f1Score" name="F1 Score %" fill="hsl(280, 65%, 60%)" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </TabsContent>
 
             <TabsContent value="radar" className="space-y-4">
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <RadarChart data={radarData}>
-                    <PolarGrid className="stroke-border" />
-                    <PolarAngleAxis dataKey="metric" tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} />
-                    <PolarRadiusAxis domain={[0, 100]} tick={{ fill: 'hsl(var(--muted-foreground))' }} />
-                    {results.map((r, idx) => (
-                      <Radar
-                        key={r.modelType}
-                        name={getModelName(r.modelType)}
-                        dataKey={getModelName(r.modelType)}
-                        stroke={colors[idx % colors.length]}
-                        fill={colors[idx % colors.length]}
-                        fillOpacity={0.2}
+              {isUnlabeled ? (
+                <div className="p-8 text-center bg-blue-500/10 rounded-lg border border-blue-500/30">
+                  <Info className="h-12 w-12 text-blue-500 mx-auto mb-4" />
+                  <h3 className="text-lg font-semibold text-blue-700 dark:text-blue-300 mb-2">
+                    Không có dữ liệu Radar cho Unlabeled Mode
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    Biểu đồ Radar hiển thị Accuracy/Precision/Recall/F1 chỉ khả dụng với dữ liệu có labels.
+                    Trong Unlabeled mode, vui lòng xem tab "So sánh" để xem Alert Rate và Anomaly Score.
+                  </p>
+                </div>
+              ) : (
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RadarChart data={radarData}>
+                      <PolarGrid className="stroke-border" />
+                      <PolarAngleAxis dataKey="metric" tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} />
+                      <PolarRadiusAxis domain={[0, 100]} tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                      {results.map((r, idx) => (
+                        <Radar
+                          key={r.modelType}
+                          name={getModelName(r.modelType)}
+                          dataKey={getModelName(r.modelType)}
+                          stroke={colors[idx % colors.length]}
+                          fill={colors[idx % colors.length]}
+                          fillOpacity={0.2}
+                        />
+                      ))}
+                      <Legend />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: 'hsl(var(--card))',
+                          border: '1px solid hsl(var(--border))',
+                          borderRadius: '0.5rem',
+                        }}
                       />
-                    ))}
-                    <Legend />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: 'hsl(var(--card))',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '0.5rem',
-                      }}
-                    />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
+                    </RadarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </TabsContent>
 
             <TabsContent value="algorithms" className="space-y-4">
@@ -582,7 +699,7 @@ function AlgorithmExplanations({ results, getModelName }: AlgorithmExplanationsP
               
               <div className="rounded-lg bg-primary/10 p-4 border border-primary/20">
                 <h4 className="font-semibold flex items-center gap-2 mb-2 text-primary">
-                  <Calculator className="h-4 w-4" />
+                  <Hash className="h-4 w-4" />
                   Công thức toán học:
                 </h4>
                 <code className="block text-sm bg-background p-2 rounded font-mono mb-2">

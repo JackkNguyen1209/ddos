@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Shield, Database, Brain, BarChart3, Loader2 } from "lucide-react";
+import { Shield, Database, Brain, BarChart3, Loader2, AlertTriangle, CheckCircle, Eye, Tag } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { FileUpload } from "@/components/file-upload";
@@ -9,7 +9,80 @@ import { ModelSelector } from "@/components/model-selector";
 import { AnalysisResults } from "@/components/analysis-results";
 import { EmptyState } from "@/components/empty-state";
 import { Progress } from "@/components/ui/progress";
-import type { Dataset, DataRow, AnalysisResult, MLModelType } from "@shared/schema";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { Dataset, DataRow, AnalysisResult, MLModelType, FeatureValidation } from "@shared/schema";
+
+function ModeIndicator({ dataset }: { dataset: Dataset }) {
+  const mode = dataset.mode || "supervised";
+  const fv = dataset.featureValidation as FeatureValidation | undefined;
+  
+  const confidenceColors = {
+    high: "bg-green-500",
+    medium: "bg-yellow-500",
+    low: "bg-red-500",
+  };
+  
+  return (
+    <Card className="mb-4" data-testid="mode-indicator">
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          {mode === "supervised" ? (
+            <>
+              <Tag className="h-4 w-4 text-green-600" />
+              <span>Mode: SUPERVISED</span>
+              <Badge className="bg-green-600 text-white">Có nhãn</Badge>
+            </>
+          ) : (
+            <>
+              <Eye className="h-4 w-4 text-blue-600" />
+              <span>Mode: UNLABELED INFERENCE</span>
+              <Badge className="bg-blue-600 text-white">Không có nhãn</Badge>
+            </>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            {mode === "supervised" ? (
+              <p className="text-sm text-muted-foreground">
+                <CheckCircle className="inline h-4 w-4 text-green-600 mr-1" />
+                Phát hiện cột label: <strong>{dataset.labelColumn}</strong>. Sẽ train và đánh giá Accuracy/Precision/Recall.
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                <AlertTriangle className="inline h-4 w-4 text-yellow-600 mr-1" />
+                Không có cột label. Sẽ chạy inference với Anomaly Score thay vì Accuracy.
+              </p>
+            )}
+          </div>
+          
+          {fv && (
+            <div className="flex flex-wrap gap-2 items-center">
+              <span className="text-xs text-muted-foreground">Độ tin cậy:</span>
+              <Badge className={`${confidenceColors[fv.confidenceLevel]} text-white text-xs`}>
+                {fv.confidenceLevel === "high" ? "Cao" : fv.confidenceLevel === "medium" ? "Trung bình" : "Thấp"}
+              </Badge>
+              
+              {fv.availableOptional.length > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  Features: {fv.availableOptional.join(", ")}
+                </span>
+              )}
+              
+              {fv.missingRequired.length > 0 && (
+                <span className="text-xs text-orange-600">
+                  Thiếu: {fv.missingRequired.join(", ")}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function Home() {
   const { toast } = useToast();
@@ -163,10 +236,13 @@ export default function Home() {
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
               </div>
             ) : datasetData?.dataset ? (
-              <DataPreview
-                dataset={datasetData.dataset}
-                previewData={datasetData.previewData}
-              />
+              <>
+                <ModeIndicator dataset={datasetData.dataset} />
+                <DataPreview
+                  dataset={datasetData.dataset}
+                  previewData={datasetData.previewData}
+                />
+              </>
             ) : (
               <EmptyState
                 type="dataset"
