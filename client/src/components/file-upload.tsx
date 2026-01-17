@@ -87,7 +87,7 @@ export function FileUpload({ onFileSelect, isUploading, uploadProgress }: FileUp
           >
             <input
               type="file"
-              accept=".csv"
+              accept=".csv,text/csv,application/csv,application/vnd.ms-excel"
               onChange={handleFileChange}
               className="absolute inset-0 cursor-pointer opacity-0"
               data-testid="input-file-upload"
