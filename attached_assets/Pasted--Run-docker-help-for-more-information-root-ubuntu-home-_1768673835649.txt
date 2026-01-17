@@ -1,0 +1,74 @@
+
+Run 'docker --help' for more information
+root@ubuntu:/home/ubuntu/ddos/ddos-main# docker-compose logs -f app
+Attaching to ddos-detection-app
+ddos-detection-app | ============================================
+ddos-detection-app |   DDoS Detection ML - Starting up...
+ddos-detection-app | ============================================
+ddos-detection-app | [1/3] Waiting for PostgreSQL database...
+ddos-detection-app |   Database is ready!
+ddos-detection-app | [2/3] Running database migrations...
+ddos-detection-app | 
+ddos-detection-app | > rest-express@1.0.0 db:push
+ddos-detection-app | > drizzle-kit push
+ddos-detection-app | 
+ddos-detection-app | No config path provided, using default 'drizzle.config.ts'
+ddos-detection-app | Reading config file '/app/drizzle.config.ts'
+ddos-detection-app | Using 'pg' driver for database querying
+ddos-detection-app | [⣷] Pulling schema from database...
+[✓] Pulling schema from database...
+ddos-detection-app | [✓] Changes applied
+ddos-detection-app |   Database schema updated!
+ddos-detection-app | [3/3] Starting application server...
+ddos-detection-app | ============================================
+ddos-detection-app |   App running at http://localhost:5000
+ddos-detection-app | ============================================
+ddos-detection-app | 
+ddos-detection-app | > rest-express@1.0.0 start
+ddos-detection-app | > NODE_ENV=production node dist/index.cjs
+ddos-detection-app | 
+ddos-detection-app | 6:16:06 PM [express] serving on port 5000
+ddos-detection-app | Internal Server Error: Error: Not allowed by CORS
+ddos-detection-app |     at origin (/app/dist/index.cjs:212:206804)
+ddos-detection-app |     at /app/dist/index.cjs:67:4483
+ddos-detection-app |     at D (/app/dist/index.cjs:67:4285)
+ddos-detection-app |     at /app/dist/index.cjs:67:4314
+ddos-detection-app |     at bc.handleRequest (/app/dist/index.cjs:43:1458)
+ddos-detection-app |     at H (/app/dist/index.cjs:43:6559)
+ddos-detection-app |     at /app/dist/index.cjs:43:6140
+ddos-detection-app |     at qQ (/app/dist/index.cjs:43:8149)
+ddos-detection-app |     at N (/app/dist/index.cjs:43:6066)
+ddos-detection-app |     at internalNext (/app/node_modules/helmet/index.cjs:531:6)
+ddos-detection-app | Internal Server Error: Error: Not allowed by CORS
+ddos-detection-app |     at origin (/app/dist/index.cjs:212:206804)
+ddos-detection-app |     at /app/dist/index.cjs:67:4483
+ddos-detection-app |     at D (/app/dist/index.cjs:67:4285)
+ddos-detection-app |     at /app/dist/index.cjs:67:4314
+ddos-detection-app |     at bc.handleRequest (/app/dist/index.cjs:43:1458)
+ddos-detection-app |     at H (/app/dist/index.cjs:43:6559)
+ddos-detection-app |     at /app/dist/index.cjs:43:6140
+ddos-detection-app |     at qQ (/app/dist/index.cjs:43:8149)
+ddos-detection-app |     at N (/app/dist/index.cjs:43:6066)
+ddos-detection-app |     at internalNext (/app/node_modules/helmet/index.cjs:531:6)
+ddos-detection-app | Internal Server Error: Error: Not allowed by CORS
+ddos-detection-app |     at origin (/app/dist/index.cjs:212:206804)
+ddos-detection-app |     at /app/dist/index.cjs:67:4483
+ddos-detection-app |     at D (/app/dist/index.cjs:67:4285)
+ddos-detection-app |     at /app/dist/index.cjs:67:4314
+ddos-detection-app |     at bc.handleRequest (/app/dist/index.cjs:43:1458)
+ddos-detection-app |     at H (/app/dist/index.cjs:43:6559)
+ddos-detection-app |     at /app/dist/index.cjs:43:6140
+ddos-detection-app |     at qQ (/app/dist/index.cjs:43:8149)
+ddos-detection-app |     at N (/app/dist/index.cjs:43:6066)
+ddos-detection-app |     at internalNext (/app/node_modules/helmet/index.cjs:531:6)
+ddos-detection-app | Internal Server Error: Error: Not allowed by CORS
+ddos-detection-app |     at origin (/app/dist/index.cjs:212:206804)
+ddos-detection-app |     at /app/dist/index.cjs:67:4483
+ddos-detection-app |     at D (/app/dist/index.cjs:67:4285)
+ddos-detection-app |     at /app/dist/index.cjs:67:4314
+ddos-detection-app |     at bc.handleRequest (/app/dist/index.cjs:43:1458)
+ddos-detection-app |     at H (/app/dist/index.cjs:43:6559)
+ddos-detection-app |     at /app/dist/index.cjs:43:6140
+ddos-detection-app |     at qQ (/app/dist/index.cjs:43:8149)
+ddos-detection-app |     at N (/app/dist/index.cjs:43:6066)
+ddos-detection-app |     at internalNext (/app/node_modules/helmet/index.cjs:531:6)

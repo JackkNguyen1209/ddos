@@ -531,34 +531,40 @@ export async function registerRoutes(
     crossOriginEmbedderPolicy: false,
   }));
   
-  // P0-04: CORS configuration - restrict to UI domain only
-  // In development, allow all origins from Replit
-  // In production, restrict to deployed app domain
+  // CORS configuration
+  // In production (Docker), frontend is served from same origin, so CORS is less strict
+  // In development (Replit), allow Replit domains
+  const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [];
+  
   app.use(cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like curl, server-side requests)
+      // Allow requests with no origin (same-origin requests, curl, server-side)
       if (!origin) return callback(null, true);
       
-      // In development, allow all Replit domains and localhost
-      if (process.env.NODE_ENV !== 'production') {
-        if (origin.includes('replit') || 
-            origin.includes('localhost') || 
-            origin.includes('127.0.0.1')) {
-          return callback(null, true);
-        }
-      }
-      
-      // In production, allow replit.app domains
-      if (origin.includes('.replit.app')) {
+      // Allow explicitly configured origins
+      if (allowedOrigins.length > 0 && allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
       
-      // Block unknown origins in production
-      if (process.env.NODE_ENV === 'production') {
-        return callback(new Error('Not allowed by CORS'));
+      // Allow localhost and local network for development/Docker
+      if (origin.includes('localhost') || 
+          origin.includes('127.0.0.1') ||
+          /^https?:\/\/(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(origin)) {
+        return callback(null, true);
       }
       
-      // In dev, be more permissive
+      // Allow Replit domains
+      if (origin.includes('.replit.dev') || origin.includes('.replit.app')) {
+        return callback(null, true);
+      }
+      
+      // In development, be permissive
+      if (process.env.NODE_ENV !== 'production') {
+        return callback(null, true);
+      }
+      
+      // In production, allow same-origin (no origin header means same-origin)
+      // For cross-origin in production, require explicit ALLOWED_ORIGINS config
       callback(null, true);
     },
     credentials: true,

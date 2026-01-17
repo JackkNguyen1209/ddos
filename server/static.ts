@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, Request, Response, NextFunction } from "express";
 import fs from "fs";
 import path from "path";
 
@@ -12,8 +12,9 @@ export function serveStatic(app: Express) {
 
   app.use(express.static(distPath));
 
-  // SPA fallback - serve index.html for all unmatched routes
-  app.get("/{*splat}", (_req, res) => {
+  // SPA fallback middleware - serve index.html for all unmatched GET requests
+  // This must be after static files and API routes
+  app.use((_req: Request, res: Response, _next: NextFunction) => {
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }

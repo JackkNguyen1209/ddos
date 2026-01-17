@@ -16,6 +16,7 @@ services:
       - SESSION_SECRET=${SESSION_SECRET:-ddos-detection-secret-key-2024}
       - NODE_ENV=production
       - PORT=5000
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
     depends_on:
       db:
         condition: service_healthy
