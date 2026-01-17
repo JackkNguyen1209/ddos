@@ -1,4 +1,72 @@
 import { z } from "zod";
+import { pgTable, serial, text, real, integer, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+
+// ============== DATABASE TABLES FOR SELF-LEARNING ==============
+
+// Training samples - accumulated from uploads
+export const trainingSamples = pgTable("training_samples", {
+  id: serial("id").primaryKey(),
+  features: jsonb("features").notNull(), // Array of feature values
+  label: integer("label").notNull(), // 0 = Normal, 1 = DDoS
+  featureNames: jsonb("feature_names").notNull(), // Column names
+  attackType: text("attack_type"), // Optional: type of attack detected
+  source: text("source").notNull(), // Which upload this came from
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertTrainingSampleSchema = createInsertSchema(trainingSamples).omit({ id: true, createdAt: true });
+export type InsertTrainingSample = z.infer<typeof insertTrainingSampleSchema>;
+export type TrainingSample = typeof trainingSamples.$inferSelect;
+
+// Model performance tracking
+export const modelPerformance = pgTable("model_performance", {
+  id: serial("id").primaryKey(),
+  modelType: text("model_type").notNull(),
+  accuracy: real("accuracy").notNull(),
+  precision: real("precision_score").notNull(),
+  recall: real("recall").notNull(),
+  f1Score: real("f1_score").notNull(),
+  trainingSamplesCount: integer("training_samples_count").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertModelPerformanceSchema = createInsertSchema(modelPerformance).omit({ id: true, createdAt: true });
+export type InsertModelPerformance = z.infer<typeof insertModelPerformanceSchema>;
+export type ModelPerformance = typeof modelPerformance.$inferSelect;
+
+// Learning sessions - track each learning cycle
+export const learningSessions = pgTable("learning_sessions", {
+  id: serial("id").primaryKey(),
+  sessionName: text("session_name").notNull(),
+  samplesAdded: integer("samples_added").notNull(),
+  totalSamplesAfter: integer("total_samples_after").notNull(),
+  ddosSamplesAdded: integer("ddos_samples_added").notNull(),
+  normalSamplesAdded: integer("normal_samples_added").notNull(),
+  improvementPercentage: real("improvement_percentage"), // How much the model improved
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertLearningSessionSchema = createInsertSchema(learningSessions).omit({ id: true, createdAt: true });
+export type InsertLearningSession = z.infer<typeof insertLearningSessionSchema>;
+export type LearningSession = typeof learningSessions.$inferSelect;
+
+// Learned patterns - store detected DDoS patterns
+export const learnedPatterns = pgTable("learned_patterns", {
+  id: serial("id").primaryKey(),
+  patternName: text("pattern_name").notNull(),
+  attackType: text("attack_type").notNull(),
+  featureThresholds: jsonb("feature_thresholds").notNull(), // e.g., {"packets": 10000, "bytes": 1000000}
+  confidence: real("confidence").notNull(),
+  sampleCount: integer("sample_count").notNull(), // How many samples this pattern was learned from
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertLearnedPatternSchema = createInsertSchema(learnedPatterns).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertLearnedPattern = z.infer<typeof insertLearnedPatternSchema>;
+export type LearnedPattern = typeof learnedPatterns.$inferSelect;
 
 // Detection Mode - Supervised (có nhãn) vs Unlabeled (không có nhãn)
 export const detectionModes = ["supervised", "unlabeled"] as const;
