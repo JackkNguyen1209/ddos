@@ -9,10 +9,47 @@ import { ModelSelector } from "@/components/model-selector";
 import { AnalysisResults } from "@/components/analysis-results";
 import { EmptyState } from "@/components/empty-state";
 import { LearningStats } from "@/components/learning-stats";
+import { FeatureReport } from "@/components/feature-report";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Dataset, DataRow, AnalysisResult, MLModelType, FeatureValidation } from "@shared/schema";
+
+interface SchemaDetection {
+  schemaType: 'cicflowmeter' | 'event_log' | 'unknown';
+  schemaConfidence: number;
+  recommendedModels: string[];
+  columnMappings: Record<string, string>;
+  normalizedColumns: string[];
+}
+
+interface FeatureReportData {
+  foundFeatures: string[];
+  missingFeatures: string[];
+  foundPercentage: number;
+  nanCount: number;
+  nanPercentage: number;
+  infCount: number;
+  infPercentage: number;
+  isReliable: boolean;
+  warnings: string[];
+}
+
+interface LabelStats {
+  [label: string]: {
+    count: number;
+    percentage: number;
+    category: string;
+  };
+}
+
+interface DatasetResponse {
+  dataset: Dataset;
+  previewData: DataRow[];
+  schemaDetection?: SchemaDetection;
+  featureReport?: FeatureReportData;
+  labelStats?: LabelStats;
+}
 
 function ModeIndicator({ dataset }: { dataset: Dataset }) {
   const mode = dataset.mode || "supervised";
@@ -91,10 +128,7 @@ export default function Home() {
   const [selectedModels, setSelectedModels] = useState<MLModelType[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  const { data: datasetData, isLoading: isLoadingDataset } = useQuery<{
-    dataset: Dataset;
-    previewData: DataRow[];
-  }>({
+  const { data: datasetData, isLoading: isLoadingDataset } = useQuery<DatasetResponse>({
     queryKey: ["/api/dataset"],
   });
 
@@ -125,7 +159,7 @@ export default function Home() {
       setUploadProgress(100);
       return response.json();
     },
-    onSuccess: (data: { dataset: Dataset; previewData: DataRow[]; warning?: string }) => {
+    onSuccess: (data: DatasetResponse & { warning?: string }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/dataset"] });
       queryClient.invalidateQueries({ queryKey: ["/api/results"] });
       
@@ -237,13 +271,24 @@ export default function Home() {
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
               </div>
             ) : datasetData?.dataset ? (
-              <>
+              <div className="space-y-4">
                 <ModeIndicator dataset={datasetData.dataset} />
-                <DataPreview
-                  dataset={datasetData.dataset}
-                  previewData={datasetData.previewData}
-                />
-              </>
+                <div className="grid md:grid-cols-3 gap-4">
+                  <div className="md:col-span-2">
+                    <DataPreview
+                      dataset={datasetData.dataset}
+                      previewData={datasetData.previewData}
+                    />
+                  </div>
+                  <div>
+                    <FeatureReport
+                      schemaDetection={datasetData.schemaDetection}
+                      featureReport={datasetData.featureReport}
+                      labelStats={datasetData.labelStats}
+                    />
+                  </div>
+                </div>
+              </div>
             ) : (
               <EmptyState
                 type="dataset"

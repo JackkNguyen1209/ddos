@@ -6,6 +6,15 @@ import { uploadDatasetSchema, analyzeRequestSchema, type DataRow, type Dataset }
 import { randomUUID } from "crypto";
 import * as XLSX from "xlsx";
 import { learningService } from "./learning-service";
+import { 
+  detectSchemaType, 
+  analyzeFeatureUsage, 
+  findColumnMapping, 
+  normalizeDataset, 
+  getModelForSchema,
+  getLabelStats,
+  type SchemaType
+} from "./schema-detection";
 
 // Helper function to extract features for report
 function extractFeaturesForReport(data: DataRow[], featureColumns: string[]): { features: number[][] } {
@@ -373,9 +382,33 @@ export async function registerRoutes(
         });
       }
 
+      // Schema Detection + Column Normalization
+      const columnMappings = findColumnMapping(columns);
+      const { type: schemaType, confidence: schemaConfidence } = detectSchemaType(columns);
+      
+      // Convert rows to 2D array for feature analysis
+      const dataArray = rows.map(row => columns.map(col => row[col]));
+      const featureReport = analyzeFeatureUsage(columns, dataArray, schemaType);
+      
+      // Normalize dataset columns and labels
+      const normalizedResult = normalizeDataset(columns, dataArray, columnMappings);
+      const normalizedColumns = normalizedResult.columns;
+      
+      // Get recommended models based on schema type
+      const recommendedModels = getModelForSchema(schemaType);
+
       // Epic 1.2: Validate Feature Contract và chọn Mode
       const featureValidation = validateFeatureContract(columns);
       const mode: import("@shared/schema").DetectionMode = featureValidation.hasLabelColumn ? "supervised" : "unlabeled";
+
+      // Get label statistics if has label column
+      let labelStats: Record<string, { count: number; percentage: number; category: string }> = {};
+      if (featureValidation.hasLabelColumn && featureValidation.detectedLabelColumn) {
+        const labelIndex = columns.indexOf(featureValidation.detectedLabelColumn);
+        if (labelIndex >= 0) {
+          labelStats = getLabelStats(dataArray, labelIndex);
+        }
+      }
 
       // Smart Feature Mapping - tự động nhận diện các cột feature
       const featureMapping = buildFeatureMapping(columns);
@@ -417,13 +450,30 @@ export async function registerRoutes(
       // Tạo warnings dựa trên validation
       const warnings: string[] = [];
       
+      // Schema type warning
+      const schemaTypeNames: Record<SchemaType, string> = {
+        'cicflowmeter': 'CICFlowMeter',
+        'event_log': 'Event/Log',
+        'unknown': 'Không xác định'
+      };
+      warnings.push(`📋 Schema: ${schemaTypeNames[schemaType]} (${schemaConfidence.toFixed(0)}% tin cậy)`);
+      
       if (mode === "unlabeled") {
         warnings.push("🔍 Mode: UNLABELED - Không tìm thấy cột label. Sẽ chạy inference và hiển thị score/cảnh báo thay vì accuracy.");
       } else {
         warnings.push(`✓ Mode: SUPERVISED - Phát hiện cột label: "${featureValidation.detectedLabelColumn}". Sẽ train và đánh giá chuẩn.`);
       }
       
-      if (featureValidation.missingRequired.length > 0) {
+      // Feature report warnings
+      if (!featureReport.isReliable) {
+        warnings.push(`⚠️ Kết quả có thể không đáng tin cậy`);
+      }
+      
+      for (const warn of featureReport.warnings) {
+        warnings.push(`⚠️ ${warn}`);
+      }
+      
+      if (featureValidation.missingRequired.length > 0 && featureReport.warnings.length === 0) {
         warnings.push(`⚠️ Thiếu features quan trọng: ${featureValidation.missingRequired.join(", ")}. ${featureValidation.confidenceReason}`);
       }
       
@@ -450,6 +500,25 @@ export async function registerRoutes(
           featureValidation,
           confidenceLevel: featureValidation.confidenceLevel,
         },
+        schemaDetection: {
+          schemaType,
+          schemaConfidence,
+          recommendedModels,
+          columnMappings,
+          normalizedColumns,
+        },
+        featureReport: {
+          foundFeatures: featureReport.foundFeatures,
+          missingFeatures: featureReport.missingFeatures,
+          foundPercentage: featureReport.foundPercentage,
+          nanCount: featureReport.nanCount,
+          nanPercentage: featureReport.nanPercentage,
+          infCount: featureReport.infCount,
+          infPercentage: featureReport.infPercentage,
+          isReliable: featureReport.isReliable,
+          warnings: featureReport.warnings,
+        },
+        labelStats,
         featureAnalysis: {
           mapping: featureMappingObj,
           detectedTypes: detectedFeatureTypes,

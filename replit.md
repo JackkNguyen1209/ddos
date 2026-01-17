@@ -110,3 +110,13 @@ The app includes a persistent learning system that accumulates knowledge across 
 - **LearningService**: Handles sample accumulation, pattern learning with batch processing (500 samples/batch)
 - **API endpoints**: /api/learning/stats, /api/learning/patterns, /api/learning/learn
 - **UI component**: LearningStats displays accumulated samples, learned patterns, and model improvements
+
+## Schema Detection & Model Routing
+
+The app includes intelligent schema detection and feature reporting:
+- **Schema Detection**: Automatically detects CICFlowMeter vs Event/Log formats
+- **Column Normalization**: Maps column aliases (flow_packets_s ↔ pps, flow_bytes_s ↔ byte_rate, etc.)
+- **Feature Report**: Shows found/missing features, NaN/Inf ratios, reliability warnings
+- **Label Mapping**: Configurable mapping (Benign→0, DrDoS_*→1, etc.)
+- **Model Routing**: Recommends appropriate models based on detected schema type
+- **UI Component**: FeatureReport displays schema type, confidence, and data quality metrics
