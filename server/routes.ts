@@ -124,18 +124,35 @@ function cleanData(rows: DataRow[], columns: string[]): {
 
   const seenRows = new Set<string>();
   const cleanedRows: DataRow[] = [];
+  
+  const criticalCols = columns.filter(col => 
+    ["label", "class", "attack", "dst_port", "protocol", "packets", "bytes", "pps"].some(
+      c => col.toLowerCase().includes(c)
+    )
+  );
 
   for (const row of rows) {
-    let hasMissing = false;
+    let missingCount = 0;
+    let hasCriticalMissing = false;
+    
     for (const col of columns) {
       if (row[col] === null || row[col] === undefined || row[col] === "") {
-        hasMissing = true;
-        missingValues++;
-        break;
+        missingCount++;
+        if (criticalCols.includes(col)) {
+          hasCriticalMissing = true;
+        }
       }
     }
-
-    if (hasMissing) continue;
+    
+    if (hasCriticalMissing) {
+      missingValues++;
+      continue;
+    }
+    
+    if (missingCount > columns.length * 0.5) {
+      missingValues++;
+      continue;
+    }
 
     const rowKey = columns.map((col) => String(row[col])).join("|");
     if (seenRows.has(rowKey)) {
@@ -147,7 +164,7 @@ function cleanData(rows: DataRow[], columns: string[]): {
     let hasOutlier = false;
     for (const col of columns) {
       const value = row[col];
-      if (typeof value === "number" && (value < -1e10 || value > 1e10)) {
+      if (typeof value === "number" && (value < -1e15 || value > 1e15)) {
         hasOutlier = true;
         outliers++;
         break;
