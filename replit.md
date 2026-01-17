@@ -135,6 +135,37 @@ The ML pipeline follows strict best practices to prevent data leakage:
   6. `model.predict()` → predict on scaled test data
 - **No Information Leak**: Test set statistics never influence scaling parameters
 
+## ML Best Practices (Advanced)
+
+The app now includes advanced ML best practices for more accurate model evaluation:
+
+### Train/Validation/Test Split (60/20/20)
+- **Train set (60%)**: Used for model training
+- **Validation set (20%)**: Used for hyperparameter tuning
+- **Test set (20%)**: Used for final unbiased evaluation
+- Scaler is fitted on train only, transforms all sets
+
+### K-Fold Cross-Validation
+- Default 5-fold cross-validation for robust evaluation
+- Reports mean and std for Accuracy, Precision, Recall, F1
+- Helps detect overfitting by evaluating on multiple data splits
+
+### Hyperparameter Tuning (Grid Search)
+- Automatic search for best hyperparameters
+- Model-specific parameter grids:
+  - **Decision Tree**: maxDepth [3, 5, 8, 10, 15]
+  - **Random Forest**: numTrees [5, 10, 20, 30], maxDepth [5, 8, 10]
+  - **KNN**: k [3, 5, 7, 9, 11]
+  - **Logistic Regression**: learningRate [0.01, 0.05, 0.1, 0.2], iterations [50, 100, 200]
+  - **LUCID CNN**: numKernels [16, 32, 48], learningRate, epochs
+- Returns best parameters, best score, and top combinations
+
+### UI Tab: "ML Chuẩn"
+- Displays Train/Val/Test split sizes and metrics
+- Shows K-Fold cross-validation results with fold-by-fold breakdown
+- Displays Grid Search results with best hyperparameters
+- Available when dataset has ≥50 samples with labels
+
 ## Expanded Label System
 
 The app supports comprehensive label detection across multiple dataset formats:

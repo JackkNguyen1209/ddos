@@ -113,6 +113,427 @@ function splitData(
   };
 }
 
+// ============== ML BEST PRACTICES: Train/Validation/Test Split ==============
+
+export interface TrainValTestSplit {
+  trainFeatures: number[][];
+  trainLabels: number[];
+  valFeatures: number[][];
+  valLabels: number[];
+  testFeatures: number[][];
+  testLabels: number[];
+  splitInfo: {
+    trainSize: number;
+    valSize: number;
+    testSize: number;
+    trainRatio: number;
+    valRatio: number;
+    testRatio: number;
+  };
+}
+
+export function splitTrainValTest(
+  features: number[][],
+  labels: number[],
+  trainRatio: number = 0.6,
+  valRatio: number = 0.2,
+  testRatio: number = 0.2
+): TrainValTestSplit {
+  const indices = features.map((_, i) => i);
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+
+  const trainEnd = Math.floor(features.length * trainRatio);
+  const valEnd = trainEnd + Math.floor(features.length * valRatio);
+
+  return {
+    trainFeatures: indices.slice(0, trainEnd).map((i) => features[i]),
+    trainLabels: indices.slice(0, trainEnd).map((i) => labels[i]),
+    valFeatures: indices.slice(trainEnd, valEnd).map((i) => features[i]),
+    valLabels: indices.slice(trainEnd, valEnd).map((i) => labels[i]),
+    testFeatures: indices.slice(valEnd).map((i) => features[i]),
+    testLabels: indices.slice(valEnd).map((i) => labels[i]),
+    splitInfo: {
+      trainSize: trainEnd,
+      valSize: valEnd - trainEnd,
+      testSize: features.length - valEnd,
+      trainRatio,
+      valRatio,
+      testRatio,
+    },
+  };
+}
+
+// ============== K-FOLD CROSS-VALIDATION ==============
+
+export interface CrossValidationResult {
+  foldResults: {
+    fold: number;
+    accuracy: number;
+    precision: number;
+    recall: number;
+    f1Score: number;
+  }[];
+  meanAccuracy: number;
+  stdAccuracy: number;
+  meanPrecision: number;
+  stdPrecision: number;
+  meanRecall: number;
+  stdRecall: number;
+  meanF1: number;
+  stdF1: number;
+  kFolds: number;
+}
+
+export function kFoldCrossValidation(
+  features: number[][],
+  labels: number[],
+  modelType: MLModelType,
+  k: number = 5,
+  hyperparams?: Record<string, any>
+): CrossValidationResult {
+  const foldSize = Math.floor(features.length / k);
+  const indices = features.map((_, i) => i);
+  
+  // Shuffle indices
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+
+  const foldResults: CrossValidationResult["foldResults"] = [];
+
+  for (let fold = 0; fold < k; fold++) {
+    const valStart = fold * foldSize;
+    const valEnd = fold === k - 1 ? features.length : (fold + 1) * foldSize;
+    
+    const valIndices = indices.slice(valStart, valEnd);
+    const trainIndices = [...indices.slice(0, valStart), ...indices.slice(valEnd)];
+
+    const trainFeatures = trainIndices.map((i) => features[i]);
+    const trainLabels = trainIndices.map((i) => labels[i]);
+    const valFeatures = valIndices.map((i) => features[i]);
+    const valLabels = valIndices.map((i) => labels[i]);
+
+    // Scale features (fit on train, transform both)
+    const scaler = new MinMaxScaler();
+    const scaledTrainFeatures = scaler.fitTransform(trainFeatures);
+    const scaledValFeatures = scaler.transform(valFeatures);
+
+    // Create and train model
+    const model = createModelWithHyperparams(modelType, hyperparams);
+    model.train(scaledTrainFeatures, trainLabels);
+    const predictions = model.predict(scaledValFeatures);
+
+    const metrics = calculateMetrics(predictions, valLabels);
+    foldResults.push({
+      fold: fold + 1,
+      accuracy: metrics.accuracy,
+      precision: metrics.precision,
+      recall: metrics.recall,
+      f1Score: metrics.f1Score,
+    });
+  }
+
+  // Calculate mean and std for all metrics
+  const accuracies = foldResults.map((r) => r.accuracy);
+  const precisions = foldResults.map((r) => r.precision);
+  const recalls = foldResults.map((r) => r.recall);
+  const f1Scores = foldResults.map((r) => r.f1Score);
+
+  const calcMean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+  const calcStd = (arr: number[], mean: number) => 
+    Math.sqrt(arr.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / arr.length);
+
+  const meanAcc = calcMean(accuracies);
+  const meanPrec = calcMean(precisions);
+  const meanRec = calcMean(recalls);
+  const meanF1 = calcMean(f1Scores);
+
+  return {
+    foldResults,
+    meanAccuracy: meanAcc,
+    stdAccuracy: calcStd(accuracies, meanAcc),
+    meanPrecision: meanPrec,
+    stdPrecision: calcStd(precisions, meanPrec),
+    meanRecall: meanRec,
+    stdRecall: calcStd(recalls, meanRec),
+    meanF1: meanF1,
+    stdF1: calcStd(f1Scores, meanF1),
+    kFolds: k,
+  };
+}
+
+// ============== HYPERPARAMETER TUNING (Grid Search) ==============
+
+export interface HyperparameterConfig {
+  name: string;
+  values: (number | string)[];
+}
+
+export interface GridSearchResult {
+  bestParams: Record<string, any>;
+  bestScore: number;
+  allResults: {
+    params: Record<string, any>;
+    score: number;
+    cvResult?: CrossValidationResult;
+  }[];
+  searchTime: number;
+  totalCombinations: number;
+}
+
+// Model hyperparameter ranges for grid search
+export const MODEL_HYPERPARAMS: Record<MLModelType, HyperparameterConfig[]> = {
+  decision_tree: [
+    { name: "maxDepth", values: [3, 5, 8, 10, 15] },
+  ],
+  random_forest: [
+    { name: "numTrees", values: [5, 10, 20, 30] },
+    { name: "maxDepth", values: [5, 8, 10] },
+  ],
+  knn: [
+    { name: "k", values: [3, 5, 7, 9, 11] },
+  ],
+  naive_bayes: [],
+  logistic_regression: [
+    { name: "learningRate", values: [0.01, 0.05, 0.1, 0.2] },
+    { name: "iterations", values: [50, 100, 200] },
+  ],
+  lucid_cnn: [
+    { name: "numKernels", values: [16, 32, 48] },
+    { name: "learningRate", values: [0.005, 0.01, 0.02] },
+    { name: "epochs", values: [20, 30, 50] },
+  ],
+};
+
+function generateParamCombinations(configs: HyperparameterConfig[]): Record<string, any>[] {
+  if (configs.length === 0) return [{}];
+  
+  const combinations: Record<string, any>[] = [];
+  
+  function generate(index: number, current: Record<string, any>) {
+    if (index === configs.length) {
+      combinations.push({ ...current });
+      return;
+    }
+    
+    const config = configs[index];
+    for (const value of config.values) {
+      current[config.name] = value;
+      generate(index + 1, current);
+    }
+  }
+  
+  generate(0, {});
+  return combinations;
+}
+
+function createModelWithHyperparams(modelType: MLModelType, params?: Record<string, any>): any {
+  switch (modelType) {
+    case "decision_tree":
+      return new DecisionTree(params?.maxDepth ?? 10);
+    case "random_forest":
+      return new RandomForestWithDepth(params?.numTrees ?? 10, params?.maxDepth ?? 8);
+    case "knn":
+      return new KNN(params?.k ?? 5);
+    case "naive_bayes":
+      return new NaiveBayes();
+    case "logistic_regression":
+      return new LogisticRegression(params?.learningRate ?? 0.1, params?.iterations ?? 100);
+    case "lucid_cnn":
+      return new LUCIDCNN(
+        params?.numKernels ?? 32,
+        3,
+        params?.learningRate ?? 0.01,
+        params?.epochs ?? 30
+      );
+    default:
+      return new DecisionTree(10);
+  }
+}
+
+// RandomForest with configurable depth
+class RandomForestWithDepth {
+  private trees: DecisionTree[] = [];
+  private numTrees: number;
+  private maxDepth: number;
+
+  constructor(numTrees: number = 10, maxDepth: number = 8) {
+    this.numTrees = numTrees;
+    this.maxDepth = maxDepth;
+  }
+
+  train(features: number[][], labels: number[]): void {
+    this.trees = [];
+    for (let t = 0; t < this.numTrees; t++) {
+      const sampleSize = Math.floor(features.length * 0.8);
+      const indices: number[] = [];
+      for (let i = 0; i < sampleSize; i++) {
+        indices.push(Math.floor(Math.random() * features.length));
+      }
+      const sampledFeatures = indices.map((i) => features[i]);
+      const sampledLabels = indices.map((i) => labels[i]);
+
+      const tree = new DecisionTree(this.maxDepth);
+      tree.train(sampledFeatures, sampledLabels);
+      this.trees.push(tree);
+    }
+  }
+
+  predict(features: number[][]): number[] {
+    return features.map((f) => {
+      const predictions = this.trees.map((tree) => tree.predict([f])[0]);
+      const ones = predictions.filter((p) => p === 1).length;
+      return ones > predictions.length / 2 ? 1 : 0;
+    });
+  }
+}
+
+export function gridSearch(
+  features: number[][],
+  labels: number[],
+  modelType: MLModelType,
+  kFolds: number = 3,
+  maxCombinations: number = 20
+): GridSearchResult {
+  const startTime = Date.now();
+  const configs = MODEL_HYPERPARAMS[modelType] || [];
+  let allCombinations = generateParamCombinations(configs);
+  
+  // Limit combinations for performance
+  if (allCombinations.length > maxCombinations) {
+    const step = Math.ceil(allCombinations.length / maxCombinations);
+    allCombinations = allCombinations.filter((_, i) => i % step === 0);
+  }
+
+  const allResults: GridSearchResult["allResults"] = [];
+  let bestParams: Record<string, any> = {};
+  let bestScore = -1;
+
+  for (const params of allCombinations) {
+    const cvResult = kFoldCrossValidation(features, labels, modelType, kFolds, params);
+    const score = cvResult.meanF1; // Use F1 as the optimization metric
+
+    allResults.push({
+      params,
+      score,
+      cvResult,
+    });
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestParams = params;
+    }
+  }
+
+  // Sort by score descending
+  allResults.sort((a, b) => b.score - a.score);
+
+  return {
+    bestParams,
+    bestScore,
+    allResults,
+    searchTime: Date.now() - startTime,
+    totalCombinations: allCombinations.length,
+  };
+}
+
+// ============== ENHANCED MODEL TRAINING WITH BEST PRACTICES ==============
+
+export interface EnhancedTrainingResult {
+  model: any;
+  trainMetrics: ReturnType<typeof calculateMetrics>;
+  valMetrics: ReturnType<typeof calculateMetrics>;
+  testMetrics: ReturnType<typeof calculateMetrics>;
+  crossValidation?: CrossValidationResult;
+  gridSearchResult?: GridSearchResult;
+  bestHyperparams: Record<string, any>;
+  splitInfo: TrainValTestSplit["splitInfo"];
+  trainingTime: number;
+}
+
+export function trainModelWithBestPractices(
+  features: number[][],
+  labels: number[],
+  modelType: MLModelType,
+  options: {
+    useCrossValidation?: boolean;
+    useGridSearch?: boolean;
+    kFolds?: number;
+    trainRatio?: number;
+    valRatio?: number;
+    testRatio?: number;
+  } = {}
+): EnhancedTrainingResult {
+  const startTime = Date.now();
+  const {
+    useCrossValidation = true,
+    useGridSearch = true,
+    kFolds = 5,
+    trainRatio = 0.6,
+    valRatio = 0.2,
+    testRatio = 0.2,
+  } = options;
+
+  // 1. Split data into train/val/test
+  const split = splitTrainValTest(features, labels, trainRatio, valRatio, testRatio);
+
+  // 2. Grid Search for best hyperparameters (on train+val)
+  let gridSearchResult: GridSearchResult | undefined;
+  let bestHyperparams: Record<string, any> = {};
+
+  if (useGridSearch && MODEL_HYPERPARAMS[modelType]?.length > 0) {
+    const trainValFeatures = [...split.trainFeatures, ...split.valFeatures];
+    const trainValLabels = [...split.trainLabels, ...split.valLabels];
+    gridSearchResult = gridSearch(trainValFeatures, trainValLabels, modelType, 3, 15);
+    bestHyperparams = gridSearchResult.bestParams;
+  }
+
+  // 3. Cross-validation on train+val with best hyperparams
+  let crossValidation: CrossValidationResult | undefined;
+  if (useCrossValidation) {
+    const trainValFeatures = [...split.trainFeatures, ...split.valFeatures];
+    const trainValLabels = [...split.trainLabels, ...split.valLabels];
+    crossValidation = kFoldCrossValidation(
+      trainValFeatures,
+      trainValLabels,
+      modelType,
+      kFolds,
+      bestHyperparams
+    );
+  }
+
+  // 4. Scale features (fit on train only, transform all)
+  const scaler = new MinMaxScaler();
+  const scaledTrainFeatures = scaler.fitTransform(split.trainFeatures);
+  const scaledValFeatures = scaler.transform(split.valFeatures);
+  const scaledTestFeatures = scaler.transform(split.testFeatures);
+
+  // 5. Train final model with best hyperparams
+  const model = createModelWithHyperparams(modelType, bestHyperparams);
+  model.train(scaledTrainFeatures, split.trainLabels);
+
+  // 6. Evaluate on all sets
+  const trainPredictions = model.predict(scaledTrainFeatures);
+  const valPredictions = model.predict(scaledValFeatures);
+  const testPredictions = model.predict(scaledTestFeatures);
+
+  return {
+    model,
+    trainMetrics: calculateMetrics(trainPredictions, split.trainLabels),
+    valMetrics: calculateMetrics(valPredictions, split.valLabels),
+    testMetrics: calculateMetrics(testPredictions, split.testLabels),
+    crossValidation,
+    gridSearchResult,
+    bestHyperparams,
+    splitInfo: split.splitInfo,
+    trainingTime: Date.now() - startTime,
+  };
+}
+
 function calculateMetrics(predicted: number[], actual: number[]) {
   let tp = 0, tn = 0, fp = 0, fn = 0;
 
@@ -838,20 +1259,146 @@ export async function analyzeWithModel(
   datasetId: string,
   modelType: MLModelType,
   data: DataRow[],
-  featureColumns: string[]
+  featureColumns: string[],
+  options: {
+    useBestPractices?: boolean;
+    useCrossValidation?: boolean;
+    useGridSearch?: boolean;
+    kFolds?: number;
+  } = {}
 ): Promise<AnalysisResult> {
   const startTime = Date.now();
+  const {
+    useBestPractices = true,
+    useCrossValidation = true,
+    useGridSearch = true,
+    kFolds = 5,
+  } = options;
 
   const { features, labels } = extractFeatures(data, featureColumns);
   
-  // CRITICAL: Split data FIRST to prevent data leakage
-  // Scaler must be fitted on training data ONLY
+  let crossValidation: CrossValidationResult | undefined;
+  let gridSearchResult: GridSearchResult | undefined;
+  let splitInfo: TrainValTestSplit["splitInfo"] | undefined;
+  let enhancedMetrics: {
+    trainMetrics?: ReturnType<typeof calculateMetrics>;
+    valMetrics?: ReturnType<typeof calculateMetrics>;
+    testMetrics?: ReturnType<typeof calculateMetrics>;
+  } | undefined;
+  let bestHyperparams: Record<string, any> = {};
+
+  // Use new ML Best Practices if enabled and data is large enough
+  if (useBestPractices && features.length >= 50) {
+    const enhancedResult = trainModelWithBestPractices(features, labels, modelType, {
+      useCrossValidation,
+      useGridSearch,
+      kFolds,
+      trainRatio: 0.6,
+      valRatio: 0.2,
+      testRatio: 0.2,
+    });
+
+    crossValidation = enhancedResult.crossValidation;
+    gridSearchResult = enhancedResult.gridSearchResult;
+    splitInfo = enhancedResult.splitInfo;
+    bestHyperparams = enhancedResult.bestHyperparams;
+    enhancedMetrics = {
+      trainMetrics: enhancedResult.trainMetrics,
+      valMetrics: enhancedResult.valMetrics,
+      testMetrics: enhancedResult.testMetrics,
+    };
+
+    // Use test metrics as the main metrics
+    const metrics = enhancedResult.testMetrics;
+    
+    // Scale all features for final predictions
+    const scaler = new MinMaxScaler();
+    const allFeaturesScaled = scaler.fitTransform(features);
+    const allPredictions = enhancedResult.model.predict(allFeaturesScaled);
+    const ddosDetected = allPredictions.filter((p: number) => p === 1).length;
+    const normalTraffic = allPredictions.filter((p: number) => p === 0).length;
+
+    const trainingTime = (Date.now() - startTime) / 1000;
+
+    const featureImportance = calculateFeatureImportance(allFeaturesScaled, allPredictions, featureColumns);
+    const ddosReasons = generateDDoSReasons(allFeaturesScaled, allPredictions, featureColumns, featureImportance);
+    const attackTypes = classifyAttackTypes(data, allPredictions, featureColumns);
+
+    let lucidAnalysis = undefined;
+    if (modelType === "lucid_cnn") {
+      const lucidModel = enhancedResult.model as LUCIDCNN;
+      const anomalyScores = lucidModel.getAnomalyScores(allFeaturesScaled);
+      const avgAnomalyScore = anomalyScores.reduce((a: number, b: number) => a + b, 0) / anomalyScores.length;
+      
+      lucidAnalysis = {
+        cnnLayers: 1,
+        kernelSize: 3,
+        timeWindow: 10,
+        flowFeatures: featureColumns.length,
+        anomalyScore: avgAnomalyScore,
+        confidence: metrics.f1Score,
+      };
+    }
+
+    return {
+      id: randomUUID(),
+      datasetId,
+      modelType,
+      accuracy: metrics.accuracy,
+      precision: metrics.precision,
+      recall: metrics.recall,
+      f1Score: metrics.f1Score,
+      confusionMatrix: metrics.confusionMatrix,
+      trainingTime,
+      ddosDetected,
+      normalTraffic,
+      analyzedAt: new Date().toISOString(),
+      featureImportance,
+      ddosReasons,
+      attackTypes,
+      lucidAnalysis,
+      crossValidation,
+      gridSearch: gridSearchResult ? {
+        bestParams: gridSearchResult.bestParams,
+        bestScore: gridSearchResult.bestScore,
+        allResults: gridSearchResult.allResults.slice(0, 10).map(r => ({
+          params: r.params,
+          score: r.score,
+        })),
+        searchTime: gridSearchResult.searchTime,
+        totalCombinations: gridSearchResult.totalCombinations,
+      } : undefined,
+      splitInfo,
+      enhancedMetrics: {
+        trainMetrics: enhancedMetrics?.trainMetrics ? {
+          accuracy: enhancedMetrics.trainMetrics.accuracy,
+          precision: enhancedMetrics.trainMetrics.precision,
+          recall: enhancedMetrics.trainMetrics.recall,
+          f1Score: enhancedMetrics.trainMetrics.f1Score,
+        } : undefined,
+        valMetrics: enhancedMetrics?.valMetrics ? {
+          accuracy: enhancedMetrics.valMetrics.accuracy,
+          precision: enhancedMetrics.valMetrics.precision,
+          recall: enhancedMetrics.valMetrics.recall,
+          f1Score: enhancedMetrics.valMetrics.f1Score,
+        } : undefined,
+        testMetrics: enhancedMetrics?.testMetrics ? {
+          accuracy: enhancedMetrics.testMetrics.accuracy,
+          precision: enhancedMetrics.testMetrics.precision,
+          recall: enhancedMetrics.testMetrics.recall,
+          f1Score: enhancedMetrics.testMetrics.f1Score,
+        } : undefined,
+      },
+      bestHyperparams,
+    };
+  }
+  
+  // FALLBACK: Original approach for small datasets or when best practices disabled
   const { trainFeatures: rawTrainFeatures, trainLabels, testFeatures: rawTestFeatures, testLabels } = splitData(features, labels);
   
-  // Fit scaler on training data only, then transform both train and test
   const scaler = new MinMaxScaler();
-  const trainFeatures = scaler.fitTransform(rawTrainFeatures);  // Fit + transform on train
-  const testFeatures = scaler.transform(rawTestFeatures);       // Transform only on test (no re-fitting!)
+  const trainFeatures = scaler.fitTransform(rawTrainFeatures);
+  const testFeatures = scaler.transform(rawTestFeatures);
 
   let model: any;
   let lucidModel: LUCIDCNN | null = null;
@@ -884,7 +1431,6 @@ export async function analyzeWithModel(
   const predictions = model.predict(testFeatures);
   const metrics = calculateMetrics(predictions, testLabels);
 
-  // Transform ALL data using scaler fitted on training data only (no data leakage)
   const allFeaturesScaled = scaler.transform(features);
   const allPredictions = model.predict(allFeaturesScaled);
   const ddosDetected = allPredictions.filter((p: number) => p === 1).length;

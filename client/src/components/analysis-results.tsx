@@ -219,14 +219,19 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="comparison" className="w-full">
-            <TabsList className="grid w-full grid-cols-6 mb-6">
+            <TabsList className="grid w-full grid-cols-7 mb-6">
               <TabsTrigger value="comparison" data-testid="tab-comparison">So sánh</TabsTrigger>
+              <TabsTrigger value="ml-practices" data-testid="tab-ml-practices">ML Chuẩn</TabsTrigger>
               <TabsTrigger value="attack-types" data-testid="tab-attack-types">Loại tấn công</TabsTrigger>
               <TabsTrigger value="radar" data-testid="tab-radar">Radar</TabsTrigger>
               <TabsTrigger value="algorithms" data-testid="tab-algorithms">Thuật toán</TabsTrigger>
               <TabsTrigger value="explanation" data-testid="tab-explanation">Giải thích</TabsTrigger>
               <TabsTrigger value="details" data-testid="tab-details">Chi tiết</TabsTrigger>
             </TabsList>
+
+            <TabsContent value="ml-practices" className="space-y-4">
+              <MLBestPracticesTab results={results} getModelName={getModelName} />
+            </TabsContent>
 
             <TabsContent value="attack-types" className="space-y-4">
               <AttackTypesAnalysis results={results} getModelName={getModelName} />
@@ -1234,6 +1239,231 @@ function AttackTypesAnalysis({ results, getModelName }: AttackTypesAnalysisProps
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function MLBestPracticesTab({ results, getModelName }: { results: AnalysisResult[]; getModelName: (type: string) => string }) {
+  const resultsWithMLPractices = results.filter(r => r.crossValidation || r.gridSearch || r.splitInfo);
+  
+  if (resultsWithMLPractices.length === 0) {
+    return (
+      <div className="p-8 text-center bg-muted/30 rounded-lg border" data-testid="ml-practices-empty">
+        <Settings className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+        <h3 className="text-lg font-semibold mb-2">Chưa có dữ liệu ML Best Practices</h3>
+        <p className="text-sm text-muted-foreground">
+          Để sử dụng Cross-Validation và Grid Search, dataset cần có ít nhất 50 mẫu với labels.
+          Các tính năng này giúp đánh giá model chính xác hơn và tìm hyperparameters tối ưu.
+        </p>
+      </div>
+    );
+  }
+
+  const firstResult = resultsWithMLPractices[0];
+
+  return (
+    <div className="space-y-6">
+      {firstResult?.splitInfo && (
+        <Card data-testid="split-info-card">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Hash className="h-5 w-5 text-primary" />
+              Train / Validation / Test Split
+            </CardTitle>
+            <CardDescription>
+              Chia dữ liệu thành 3 tập: huấn luyện, validation (điều chỉnh), và test (đánh giá cuối)
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="p-4 rounded-lg bg-blue-500/10 text-center" data-testid="train-split">
+                <p className="text-2xl font-bold text-blue-600">{firstResult.splitInfo.trainSize.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">Train ({(firstResult.splitInfo.trainRatio * 100).toFixed(0)}%)</p>
+              </div>
+              <div className="p-4 rounded-lg bg-orange-500/10 text-center" data-testid="val-split">
+                <p className="text-2xl font-bold text-orange-600">{firstResult.splitInfo.valSize.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">Validation ({(firstResult.splitInfo.valRatio * 100).toFixed(0)}%)</p>
+              </div>
+              <div className="p-4 rounded-lg bg-green-500/10 text-center" data-testid="test-split">
+                <p className="text-2xl font-bold text-green-600">{firstResult.splitInfo.testSize.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">Test ({(firstResult.splitInfo.testRatio * 100).toFixed(0)}%)</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {resultsWithMLPractices.map((result) => (
+        <Card key={result.id} data-testid={`model-ml-practices-${result.modelType}`}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Zap className="h-5 w-5 text-primary" />
+              {getModelName(result.modelType)}
+              <Badge variant="outline" className="ml-2">{(result.f1Score * 100).toFixed(1)}% F1</Badge>
+            </CardTitle>
+            <CardDescription>
+              Chi tiết Cross-Validation và Hyperparameter Tuning cho model này
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {result.enhancedMetrics && (
+              <div>
+                <p className="text-sm font-medium mb-2">Train / Val / Test Metrics:</p>
+                <div className="grid grid-cols-3 gap-3">
+                  {result.enhancedMetrics.trainMetrics && (
+                    <div className="p-3 border rounded-lg" data-testid={`train-metrics-${result.modelType}`}>
+                      <p className="text-xs font-medium text-blue-600 mb-2">Train</p>
+                      <div className="space-y-1 text-xs">
+                        <div className="flex justify-between">
+                          <span>Accuracy:</span>
+                          <span className="font-medium">{(result.enhancedMetrics.trainMetrics.accuracy * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>F1:</span>
+                          <span className="font-medium">{(result.enhancedMetrics.trainMetrics.f1Score * 100).toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {result.enhancedMetrics.valMetrics && (
+                    <div className="p-3 border rounded-lg" data-testid={`val-metrics-${result.modelType}`}>
+                      <p className="text-xs font-medium text-orange-600 mb-2">Validation</p>
+                      <div className="space-y-1 text-xs">
+                        <div className="flex justify-between">
+                          <span>Accuracy:</span>
+                          <span className="font-medium">{(result.enhancedMetrics.valMetrics.accuracy * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>F1:</span>
+                          <span className="font-medium">{(result.enhancedMetrics.valMetrics.f1Score * 100).toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {result.enhancedMetrics.testMetrics && (
+                    <div className="p-3 border rounded-lg" data-testid={`test-metrics-${result.modelType}`}>
+                      <p className="text-xs font-medium text-green-600 mb-2">Test</p>
+                      <div className="space-y-1 text-xs">
+                        <div className="flex justify-between">
+                          <span>Accuracy:</span>
+                          <span className="font-medium">{(result.enhancedMetrics.testMetrics.accuracy * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>F1:</span>
+                          <span className="font-medium">{(result.enhancedMetrics.testMetrics.f1Score * 100).toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {result.crossValidation && (
+              <div>
+                <p className="text-sm font-medium mb-2">{result.crossValidation.kFolds}-Fold Cross-Validation:</p>
+                <div className="grid grid-cols-4 gap-3 mb-3">
+                  <div className="p-3 rounded-lg bg-blue-500/10 text-center">
+                    <p className="text-lg font-bold text-blue-600">
+                      {(result.crossValidation.meanAccuracy * 100).toFixed(1)}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Acc (±{(result.crossValidation.stdAccuracy * 100).toFixed(1)}%)
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-green-500/10 text-center">
+                    <p className="text-lg font-bold text-green-600">
+                      {(result.crossValidation.meanPrecision * 100).toFixed(1)}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Prec (±{(result.crossValidation.stdPrecision * 100).toFixed(1)}%)
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-orange-500/10 text-center">
+                    <p className="text-lg font-bold text-orange-600">
+                      {(result.crossValidation.meanRecall * 100).toFixed(1)}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Recall (±{(result.crossValidation.stdRecall * 100).toFixed(1)}%)
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-purple-500/10 text-center">
+                    <p className="text-lg font-bold text-purple-600">
+                      {(result.crossValidation.meanF1 * 100).toFixed(1)}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      F1 (±{(result.crossValidation.stdF1 * 100).toFixed(1)}%)
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {result.crossValidation.foldResults.map((fold) => (
+                    <div key={fold.fold} className="px-2 py-1 border rounded text-xs" data-testid={`fold-${result.modelType}-${fold.fold}`}>
+                      Fold {fold.fold}: {(fold.accuracy * 100).toFixed(0)}%
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {result.gridSearch && (
+              <div>
+                <p className="text-sm font-medium mb-2">
+                  Grid Search ({result.gridSearch.totalCombinations} tổ hợp, {(result.gridSearch.searchTime / 1000).toFixed(1)}s):
+                </p>
+                <div className="grid md:grid-cols-2 gap-3">
+                  <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30">
+                    <div className="flex items-center gap-2 mb-2">
+                      <CheckCircle2 className="h-4 w-4 text-green-600" />
+                      <span className="font-medium text-sm text-green-700">Best: {(result.gridSearch.bestScore * 100).toFixed(1)}% F1</span>
+                    </div>
+                    <div className="space-y-1 text-xs">
+                      {Object.entries(result.gridSearch.bestParams).length > 0 ? (
+                        Object.entries(result.gridSearch.bestParams).map(([key, value]) => (
+                          <div key={key} className="flex justify-between">
+                            <span className="text-muted-foreground">{key}:</span>
+                            <span className="font-medium">{String(value)}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-muted-foreground">Tham số mặc định</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-lg border">
+                    <p className="text-xs font-medium mb-2">Top 3:</p>
+                    <div className="space-y-1">
+                      {result.gridSearch.allResults.slice(0, 3).map((r, idx) => (
+                        <div key={idx} className="flex justify-between items-center text-xs">
+                          <span className="text-muted-foreground truncate">
+                            {Object.entries(r.params).map(([k, v]) => `${k}=${v}`).join(", ") || "default"}
+                          </span>
+                          <Badge variant={idx === 0 ? "default" : "secondary"} className="ml-1 text-xs">
+                            {(r.score * 100).toFixed(1)}%
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {result.bestHyperparams && Object.keys(result.bestHyperparams).length > 0 && !result.gridSearch && (
+              <div>
+                <p className="text-sm font-medium mb-2">Best Hyperparameters:</p>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(result.bestHyperparams).map(([key, value]) => (
+                    <Badge key={key} variant="outline" className="text-xs">
+                      {key}: {String(value)}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

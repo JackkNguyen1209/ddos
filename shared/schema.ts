@@ -584,6 +584,78 @@ export const attackTypeResultSchema = z.object({
 
 export type AttackTypeResult = z.infer<typeof attackTypeResultSchema>;
 
+// Cross-Validation Result Schema
+export const crossValidationResultSchema = z.object({
+  foldResults: z.array(z.object({
+    fold: z.number(),
+    accuracy: z.number(),
+    precision: z.number(),
+    recall: z.number(),
+    f1Score: z.number(),
+  })),
+  meanAccuracy: z.number(),
+  stdAccuracy: z.number(),
+  meanPrecision: z.number(),
+  stdPrecision: z.number(),
+  meanRecall: z.number(),
+  stdRecall: z.number(),
+  meanF1: z.number(),
+  stdF1: z.number(),
+  kFolds: z.number(),
+});
+
+export type CrossValidationResult = z.infer<typeof crossValidationResultSchema>;
+
+// Grid Search Result Schema
+export const gridSearchResultSchema = z.object({
+  bestParams: z.record(z.any()),
+  bestScore: z.number(),
+  allResults: z.array(z.object({
+    params: z.record(z.any()),
+    score: z.number(),
+  })),
+  searchTime: z.number(),
+  totalCombinations: z.number(),
+});
+
+export type GridSearchResult = z.infer<typeof gridSearchResultSchema>;
+
+// Train/Val/Test Split Info Schema
+export const splitInfoSchema = z.object({
+  trainSize: z.number(),
+  valSize: z.number(),
+  testSize: z.number(),
+  trainRatio: z.number(),
+  valRatio: z.number(),
+  testRatio: z.number(),
+});
+
+export type SplitInfo = z.infer<typeof splitInfoSchema>;
+
+// Enhanced Metrics with Train/Val/Test
+export const enhancedMetricsSchema = z.object({
+  trainMetrics: z.object({
+    accuracy: z.number(),
+    precision: z.number(),
+    recall: z.number(),
+    f1Score: z.number(),
+  }).optional(),
+  valMetrics: z.object({
+    accuracy: z.number(),
+    precision: z.number(),
+    recall: z.number(),
+    f1Score: z.number(),
+  }).optional(),
+  testMetrics: z.object({
+    accuracy: z.number(),
+    precision: z.number(),
+    recall: z.number(),
+    f1Score: z.number(),
+  }).optional(),
+});
+
+export type EnhancedMetrics = z.infer<typeof enhancedMetricsSchema>;
+
 // Analysis result schema
 export const analysisResultSchema = z.object({
   id: z.string(),
@@ -615,6 +687,12 @@ export const analysisResultSchema = z.object({
     anomalyScore: z.number(),
     confidence: z.number(),
   }).optional(),
+  // ML Best Practices fields
+  crossValidation: crossValidationResultSchema.optional(),
+  gridSearch: gridSearchResultSchema.optional(),
+  splitInfo: splitInfoSchema.optional(),
+  enhancedMetrics: enhancedMetricsSchema.optional(),
+  bestHyperparams: z.record(z.any()).optional(),
   // Unlabeled mode fields
   unlabeledReport: z.object({
     scoreDistribution: z.object({
