@@ -40,26 +40,51 @@ function extractFeatures(data: DataRow[], featureColumns: string[]): TrainingDat
   return { features, labels };
 }
 
-function normalizeFeatures(features: number[][]): number[][] {
-  if (features.length === 0) return features;
+class MinMaxScaler {
+  private mins: number[] = [];
+  private maxs: number[] = [];
+  private fitted: boolean = false;
 
-  const numFeatures = features[0].length;
-  const mins: number[] = new Array(numFeatures).fill(Infinity);
-  const maxs: number[] = new Array(numFeatures).fill(-Infinity);
+  fit(features: number[][]): void {
+    if (features.length === 0) return;
 
-  for (const row of features) {
-    for (let i = 0; i < numFeatures; i++) {
-      mins[i] = Math.min(mins[i], row[i]);
-      maxs[i] = Math.max(maxs[i], row[i]);
+    const numFeatures = features[0].length;
+    this.mins = new Array(numFeatures).fill(Infinity);
+    this.maxs = new Array(numFeatures).fill(-Infinity);
+
+    for (const row of features) {
+      for (let i = 0; i < numFeatures; i++) {
+        this.mins[i] = Math.min(this.mins[i], row[i]);
+        this.maxs[i] = Math.max(this.maxs[i], row[i]);
+      }
     }
+    this.fitted = true;
   }
 
-  return features.map((row) =>
-    row.map((val, i) => {
-      const range = maxs[i] - mins[i];
-      return range === 0 ? 0 : (val - mins[i]) / range;
-    })
-  );
+  transform(features: number[][]): number[][] {
+    if (!this.fitted || features.length === 0) return features;
+
+    return features.map((row) =>
+      row.map((val, i) => {
+        const range = this.maxs[i] - this.mins[i];
+        return range === 0 ? 0 : (val - this.mins[i]) / range;
+      })
+    );
+  }
+
+  fitTransform(features: number[][]): number[][] {
+    this.fit(features);
+    return this.transform(features);
+  }
+
+  getParams(): { mins: number[]; maxs: number[] } {
+    return { mins: [...this.mins], maxs: [...this.maxs] };
+  }
+}
+
+function normalizeFeatures(features: number[][]): number[][] {
+  const scaler = new MinMaxScaler();
+  return scaler.fitTransform(features);
 }
 
 function splitData(
@@ -818,8 +843,15 @@ export async function analyzeWithModel(
   const startTime = Date.now();
 
   const { features, labels } = extractFeatures(data, featureColumns);
-  const normalizedFeatures = normalizeFeatures(features);
-  const { trainFeatures, trainLabels, testFeatures, testLabels } = splitData(normalizedFeatures, labels);
+  
+  // CRITICAL: Split data FIRST to prevent data leakage
+  // Scaler must be fitted on training data ONLY
+  const { trainFeatures: rawTrainFeatures, trainLabels, testFeatures: rawTestFeatures, testLabels } = splitData(features, labels);
+  
+  // Fit scaler on training data only, then transform both train and test
+  const scaler = new MinMaxScaler();
+  const trainFeatures = scaler.fitTransform(rawTrainFeatures);  // Fit + transform on train
+  const testFeatures = scaler.transform(rawTestFeatures);       // Transform only on test (no re-fitting!)
 
   let model: any;
   let lucidModel: LUCIDCNN | null = null;
@@ -852,20 +884,22 @@ export async function analyzeWithModel(
   const predictions = model.predict(testFeatures);
   const metrics = calculateMetrics(predictions, testLabels);
 
-  const allPredictions = model.predict(normalizedFeatures);
+  // Transform ALL data using scaler fitted on training data only (no data leakage)
+  const allFeaturesScaled = scaler.transform(features);
+  const allPredictions = model.predict(allFeaturesScaled);
   const ddosDetected = allPredictions.filter((p: number) => p === 1).length;
   const normalTraffic = allPredictions.filter((p: number) => p === 0).length;
 
   const trainingTime = (Date.now() - startTime) / 1000;
 
-  const featureImportance = calculateFeatureImportance(normalizedFeatures, allPredictions, featureColumns);
-  const ddosReasons = generateDDoSReasons(normalizedFeatures, allPredictions, featureColumns, featureImportance);
+  const featureImportance = calculateFeatureImportance(allFeaturesScaled, allPredictions, featureColumns);
+  const ddosReasons = generateDDoSReasons(allFeaturesScaled, allPredictions, featureColumns, featureImportance);
   
   const attackTypes = classifyAttackTypes(data, allPredictions, featureColumns);
   
   let lucidAnalysis = undefined;
   if (modelType === "lucid_cnn" && lucidModel) {
-    const anomalyScores = lucidModel.getAnomalyScores(normalizedFeatures);
+    const anomalyScores = lucidModel.getAnomalyScores(allFeaturesScaled);
     const avgAnomalyScore = anomalyScores.reduce((a, b) => a + b, 0) / anomalyScores.length;
     
     lucidAnalysis = {

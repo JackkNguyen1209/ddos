@@ -120,3 +120,17 @@ The app includes intelligent schema detection and feature reporting:
 - **Label Mapping**: Configurable mapping (Benign→0, DrDoS_*→1, etc.)
 - **Model Routing**: Recommends appropriate models based on detected schema type
 - **UI Component**: FeatureReport displays schema type, confidence, and data quality metrics
+
+## ML Pipeline - Data Leakage Prevention
+
+The ML pipeline follows strict best practices to prevent data leakage:
+- **Split First**: Data is split into train/test BEFORE any preprocessing
+- **MinMaxScaler**: Fitted on training data ONLY, then transforms both train and test
+- **Pipeline Flow**:
+  1. `extractFeatures()` → raw features and labels
+  2. `splitData()` → train/test split (80/20)
+  3. `scaler.fitTransform(trainFeatures)` → fit on train only
+  4. `scaler.transform(testFeatures)` → transform test using train params
+  5. `model.train()` → train on scaled train data
+  6. `model.predict()` → predict on scaled test data
+- **No Information Leak**: Test set statistics never influence scaling parameters
