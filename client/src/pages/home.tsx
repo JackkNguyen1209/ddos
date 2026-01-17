@@ -139,24 +139,25 @@ export default function Home() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: async ({ file, name }: { file: File; name: string }) => {
-      let data: string;
-      const isExcel = file.name.endsWith(".xlsx") || file.name.endsWith(".xls");
+    mutationFn: async ({ file }: { file: File; name: string }) => {
+      setUploadProgress(10);
       
-      if (isExcel) {
-        const arrayBuffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = "";
-        for (let i = 0; i < bytes.length; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        data = btoa(binary);
-      } else {
-        data = await file.text();
-      }
+      // Use FormData for multipart upload (P0-02)
+      const formData = new FormData();
+      formData.append('file', file);
       
       setUploadProgress(30);
-      const response = await apiRequest("POST", "/api/upload", { name, data });
+      
+      const response = await fetch('/api/upload/file', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Upload failed');
+      }
+      
       setUploadProgress(100);
       return response.json();
     },

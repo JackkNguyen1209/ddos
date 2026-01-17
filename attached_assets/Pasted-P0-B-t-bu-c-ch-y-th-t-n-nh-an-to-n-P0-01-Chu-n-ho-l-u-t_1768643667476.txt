@@ -1,0 +1,241 @@
+P0 — Bắt buộc để chạy “thật” (ổn định + an toàn)
+P0-01: Chuẩn hoá lưu trữ Dataset/Result (bỏ in-memory)
+
+Mục tiêu: Không mất dữ liệu khi restart, hỗ trợ multi-user, truy vết theo datasetId/jobId.
+Phạm vi:
+
+Thay server/storage.ts (in-memory) bằng DB + object storage.
+
+DB lưu: dataset metadata, trạng thái xử lý, kết quả phân tích, audit.
+
+File thô lưu: MinIO/S3 (hoặc lưu trực tiếp DB nếu nhỏ, nhưng không khuyến khích).
+AC:
+
+Restart service không mất dataset/result.
+
+Mỗi upload trả về datasetId.
+
+GET /api/datasets/:id trả metadata + trạng thái.
+
+GET /api/results/:id trả kết quả tương ứng.
+
+P0-02: Upload file đúng chuẩn (multipart + giới hạn dung lượng)
+
+Mục tiêu: Chống DoS, upload ổn định, không gửi CSV text/base64 “nặng”.
+Phạm vi:
+
+Dùng multer/streaming hoặc busboy.
+
+Giới hạn size theo cấu hình (vd 50MB).
+
+Xác thực mime/type + extension + magic bytes (xlsx).
+
+Tách “parse” sang job async (không parse trực tiếp trong request nếu file lớn).
+AC:
+
+Upload file lớn không làm crash/đơ API.
+
+Trả lỗi rõ ràng nếu vượt size / sai định dạng.
+
+Không còn endpoint nhận base64 excel trong JSON body.
+
+P0-03: Parser CSV “đúng” (không split bằng dấu phẩy)
+
+Mục tiêu: CSV có quotes, dấu phẩy trong field, newline trong field vẫn parse đúng.
+Phạm vi:
+
+Dùng csv-parse hoặc papaparse server-side.
+
+Parse dạng stream để giảm RAM.
+AC:
+
+CSV có "a,b" parse đúng thành 1 field.
+
+Hỗ trợ UTF-8, BOM.
+
+Có unit test cho 5 case CSV phổ biến.
+
+P0-04: Bảo mật API tối thiểu (Auth + CORS + Helmet + rate limit chuẩn)
+
+Mục tiêu: Không mở toang, không bị abuse.
+Phạm vi:
+
+Auth JWT hoặc session (tuỳ hệ thống bạn).
+
+CORS chỉ allow domain UI.
+
+helmet, bodyParser limit nhỏ, trust proxy đúng.
+
+Rate limit dùng express-rate-limit hoặc gateway/WAF (Cloudflare/Nginx).
+AC:
+
+Endpoint upload/analyze yêu cầu token.
+
+Rate limit hoạt động đúng theo real client IP.
+
+Không log response body chứa dữ liệu.
+
+P0-05: Tắt log dữ liệu nhạy cảm + chuẩn hoá log format
+
+Mục tiêu: Không leak dataset, không phình log.
+Phạm vi:
+
+Bỏ middleware “wrap res.json” log cả body.
+
+Log theo requestId, route, status, latency, datasetId/jobId.
+AC:
+
+Log không chứa raw rows/preview.
+
+Có requestId xuyên suốt 1 request.
+
+P1 — Sửa “độ đúng ML” (kết quả đáng tin)
+P1-01: Tách rõ 2 chế độ: Supervised vs Unlabeled
+
+Mục tiêu: Không còn “Accuracy 100% giả” khi thiếu label.
+Phạm vi:
+
+Supervised: bắt buộc label hợp lệ.
+
+Unlabeled: không tính accuracy/precision/recall; chỉ anomaly score + top anomalies + cluster/summary.
+
+UI hiển thị đúng theo chế độ.
+AC:
+
+Dataset không label → UI không hiển thị Accuracy/F1.
+
+Dataset có label → metrics đầy đủ và consistent.
+
+API trả mode: supervised|unlabeled.
+
+P1-02: Chuẩn hoá label mapping + schema mapping có kiểm thử
+
+Mục tiêu: Nhãn từ nhiều đơn vị khác nhau vẫn map đúng.
+Phạm vi:
+
+Central mapping: label_mappings.json + versioning.
+
+Luật map label (case-insensitive, trim, synonym list).
+
+Báo cáo “unknown label values”.
+AC:
+
+Nếu có label lạ: system trả warning + thống kê.
+
+Unit test cho mapping.
+
+Không tự default label=0 khi thiếu/unknown (phải báo).
+
+P1-03: Fix bug LOF scoring trong anomaly pipeline
+
+Mục tiêu: LOF score phản ánh đúng từng điểm dữ liệu.
+Phạm vi:
+
+Tính score theo point i (không dùng lofIdx sai).
+
+Nếu sampling: dùng chiến lược rõ ràng (fit sample → score all).
+AC:
+
+Regression test: cùng input → score ổn định/không “ngẫu nhiên”.
+
+Review code: LOF predict gọi với đúng vector của từng point.
+
+P1-04: Feature importance đúng bản chất
+
+Mục tiêu: “Giải thích” dựa trên ground truth (supervised) hoặc anomaly score (unlabeled).
+Phạm vi:
+
+Supervised: importance dùng label thật.
+
+Unlabeled: dùng correlation với anomaly score hoặc permutation importance.
+AC:
+
+API response trả explainability_method rõ ràng.
+
+Không dùng prediction làm label cho feature importance.
+
+P1-05: Loại bỏ/đóng nhãn rõ model “toy” (LUCID CNN) hoặc thay bằng model chuẩn
+
+Mục tiêu: Tránh hiểu nhầm “CNN chuẩn”.
+Phạm vi (2 lựa chọn):
+
+A) Giữ nhưng gắn nhãn “experimental/toy” + không dùng production.
+
+B) Thay bằng model chuẩn (Python sklearn/xgboost/lightgbm).
+AC:
+
+UI hiển thị cảnh báo nếu chọn model experimental.
+
+Production default chỉ còn model validated.
+
+P2 — Hiệu năng + khả năng mở rộng
+P2-01: Tách xử lý ML sang worker/queue (async job)
+
+Mục tiêu: Không block Node event loop, chạy dataset lớn không đơ.
+Phạm vi:
+
+BullMQ + Redis hoặc RabbitMQ.
+
+API POST /analyze trả jobId.
+
+GET /jobs/:id lấy status; GET /results/:datasetId lấy kết quả.
+AC:
+
+Khi job chạy, API vẫn responsive.
+
+Có retry/backoff + timeout.
+
+Có cancel job (optional).
+
+P2-02: Giới hạn & tối ưu feature/rows (sampling + memory guard)
+
+Mục tiêu: Bảo vệ hệ thống khỏi dataset cực lớn.
+Phạm vi:
+
+Hard limit rows/cols theo config.
+
+Với unlabeled: sampling + hiển thị mức tin cậy.
+AC:
+
+Dataset vượt limit → reject có message.
+
+Dataset lớn → vẫn chạy, có cảnh báo sampling.
+
+P2-03: Chuẩn hoá export + audit trails
+
+Mục tiêu: Truy vết được “dataset nào → model gì → version nào → kết quả nào”.
+Phạm vi:
+
+Audit record: datasetId, jobId, modelType, modelVersion, config hash, timestamps.
+AC:
+
+Export kèm metadata.
+
+Audit page hiển thị được lịch sử.
+
+P3 — Chất lượng code + maintainability
+P3-01: Refactor ML module thành package rõ ràng
+
+Mục tiêu: Dễ test, dễ thay model.
+Phạm vi:
+
+Tách: preprocess/, models/, evaluation/, anomaly/, explain/
+
+Interface chung: fit(), predict(), predictProba(), serialize().
+AC:
+
+Không file “ml-algorithms.ts” quá lớn.
+
+Thêm 10–20 unit tests cốt lõi.
+
+P3-02: Test suite + CI
+
+Mục tiêu: Không “sửa xong lại hỏng”.
+Phạm vi:
+
+Jest/Vitest cho server.
+
+CI chạy lint + test.
+AC:
+
+PR không pass test thì không merge

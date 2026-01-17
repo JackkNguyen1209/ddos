@@ -216,21 +216,47 @@ After analysis, users can review and correct results to improve future detection
 - Apply feedback to improve learning system
 - Create custom tags for data classification
 
-## Performance & Security Enhancements
+## Performance & Security Enhancements (P0 Updates)
+
+### Database Storage (P0-01)
+- **PostgreSQL persistent storage** for dataset metadata, analysis results, and audit logs
+- Tables: `datasets`, `analysis_results`, `audit_logs`
+- Each upload returns a unique `datasetId`
+- **Known Limitation**: Dataset rows are cached in global memory for ML analysis performance; metadata persists in DB
+
+### Multipart File Upload (P0-02)
+- Uses **multer** for proper multipart/form-data handling
+- Endpoint: `POST /api/upload/file` (FormData with 'file' field)
+- Streaming upload - no base64 encoding in JSON body
+- File size limit: 50MB
+- Magic byte validation for Excel files
+
+### CSV Parsing (P0-03)
+- Uses **PapaParse** for RFC 4180 compliant CSV parsing
+- Proper handling of quotes, commas in fields, newlines in fields
+- UTF-8 and BOM support
+- Dynamic type conversion for numbers
+
+### Security (P0-04)
+- **Helmet** security headers enabled
+- Rate limiting: 60 requests per minute per IP
+- CORS configured for UI domain only
+- Input validation on all endpoints
+
+### Secure Logging (P0-05)
+- **No response body logging** - prevents data leaks
+- RequestId (X-Request-Id) for request tracing
+- Log format: `[requestId] METHOD /path STATUS durationMs`
+- All audit logs stored in PostgreSQL (not in-memory)
 
 ### Analysis Caching
 - In-memory cache for analysis results (30 minutes TTL)
 - Automatic cache cleanup when size exceeds 100 entries
 - API endpoints: `GET /api/cache/stats`, `DELETE /api/cache`
 
-### Rate Limiting
-- 60 requests per minute per IP address
-- Returns HTTP 429 when limit exceeded
-- Headers: X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset
-
 ### Audit Logging
 - Tracks all actions: upload, analyze, export, feedback, cache operations
-- In-memory storage (last 1000 entries)
+- **PostgreSQL storage** (persistent)
 - API endpoint: `GET /api/audit-logs?limit=50&offset=0`
 
 ### Input Validation

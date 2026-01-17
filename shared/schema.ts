@@ -119,6 +119,57 @@ export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: tru
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
 
+// ============== DATASETS TABLE (persistent storage) ==============
+export const datasets = pgTable("datasets", {
+  id: text("id").primaryKey(), // UUID
+  name: text("name").notNull(),
+  originalRowCount: integer("original_row_count").notNull(),
+  cleanedRowCount: integer("cleaned_row_count").notNull(),
+  columns: jsonb("columns").notNull(), // string[]
+  mode: text("mode").notNull(), // supervised | unlabeled
+  labelColumn: text("label_column"),
+  featureValidation: jsonb("feature_validation"),
+  dataQuality: jsonb("data_quality").notNull(),
+  schemaType: text("schema_type"), // cicflowmeter | event_log | unknown
+  status: text("status").default("ready").notNull(), // uploading | processing | ready | error
+  filePath: text("file_path"), // Path to stored file
+  previewData: jsonb("preview_data"), // First 10 rows for preview
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertDatasetSchema = createInsertSchema(datasets).omit({ createdAt: true, updatedAt: true });
+export type InsertDataset = z.infer<typeof insertDatasetSchema>;
+export type DatasetRecord = typeof datasets.$inferSelect;
+
+// ============== ANALYSIS RESULTS TABLE ==============
+export const analysisResults = pgTable("analysis_results", {
+  id: serial("id").primaryKey(),
+  datasetId: text("dataset_id").notNull(),
+  modelType: text("model_type").notNull(),
+  accuracy: real("accuracy"),
+  precision: real("precision_score"),
+  recall: real("recall"),
+  f1Score: real("f1_score"),
+  trainingTime: real("training_time").notNull(),
+  ddosDetected: integer("ddos_detected").notNull(),
+  normalTraffic: integer("normal_traffic").notNull(),
+  mode: text("mode").notNull(), // supervised | unlabeled
+  attackTypes: jsonb("attack_types"),
+  confusionMatrix: jsonb("confusion_matrix"),
+  unlabeledReport: jsonb("unlabeled_report"),
+  advancedMetrics: jsonb("advanced_metrics"),
+  featureImportance: jsonb("feature_importance"),
+  hyperparameters: jsonb("hyperparameters"),
+  status: text("status").default("completed").notNull(), // pending | running | completed | error
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertAnalysisResultSchema = createInsertSchema(analysisResults).omit({ id: true, createdAt: true });
+export type InsertAnalysisResult = z.infer<typeof insertAnalysisResultSchema>;
+export type AnalysisResultRecord = typeof analysisResults.$inferSelect;
+
 // ============== CONFUSION MATRIX ==============
 export interface ConfusionMatrix {
   truePositives: number;

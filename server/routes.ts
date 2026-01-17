@@ -1,10 +1,14 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
+import cors from "cors";
 import { storage } from "./storage";
 import { analyzeWithModel, getFeatureColumns, runAnomalyDetection, generateUnlabeledReport, buildFeatureMapping, getFeatureStatistics, analyzeRowForAttack, getCachedResult, setCachedResult, clearCache, getCacheStats, calculateConfusionMatrix, calculateFeatureImportance } from "./ml-algorithms";
 import { uploadDatasetSchema, analyzeRequestSchema, type DataRow, type Dataset, type InsertAuditLog } from "@shared/schema";
 import { randomUUID } from "crypto";
 import * as XLSX from "xlsx";
+import multer from "multer";
+import Papa from "papaparse";
+import helmet from "helmet";
 import { learningService } from "./learning-service";
 import { 
   detectSchemaType, 
@@ -22,6 +26,80 @@ import {
   type LabelConfig,
   type LabelCategory
 } from "./schema-detection";
+
+// ============== MULTER CONFIGURATION (Multipart Upload) ==============
+const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
+
+const multerStorage = multer.memoryStorage();
+const upload = multer({
+  storage: multerStorage,
+  limits: {
+    fileSize: MAX_FILE_SIZE_BYTES,
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/octet-stream', // Some browsers send this for CSV
+    ];
+    const allowedExts = ['.csv', '.xlsx', '.xls'];
+    const ext = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf('.'));
+    
+    if (allowedExts.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Định dạng file không hợp lệ. Chỉ hỗ trợ: ${allowedExts.join(', ')}`));
+    }
+  },
+});
+
+// Parse CSV using PapaParse (proper RFC 4180 compliant parser)
+function parseCSVWithPapa(content: string): { columns: string[]; rows: DataRow[] } {
+  const result = Papa.parse(content, {
+    header: true,
+    skipEmptyLines: true,
+    transformHeader: (header) => header.trim(),
+    dynamicTyping: true, // Auto-convert numbers
+  });
+  
+  if (result.errors.length > 0) {
+    console.warn("CSV parsing warnings:", result.errors.slice(0, 5));
+  }
+  
+  const columns = result.meta.fields || [];
+  const rows: DataRow[] = result.data as DataRow[];
+  
+  return { columns, rows };
+}
+
+// Parse Excel file
+function parseExcelFile(buffer: Buffer): { columns: string[]; rows: DataRow[] } {
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  
+  const jsonData = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1 });
+  
+  if (jsonData.length === 0) {
+    return { columns: [], rows: [] };
+  }
+  
+  const headerRow = jsonData[0] as any[];
+  const columns = headerRow.map((h: any) => String(h).trim());
+  
+  const rows: DataRow[] = [];
+  for (let i = 1; i < jsonData.length; i++) {
+    const dataRow = jsonData[i] as any[];
+    const row: DataRow = {};
+    for (let j = 0; j < columns.length; j++) {
+      row[columns[j]] = dataRow?.[j] ?? null;
+    }
+    rows.push(row);
+  }
+  
+  return { columns, rows };
+}
 
 // ============== RATE LIMITING ==============
 interface RateLimitEntry {
@@ -78,24 +156,20 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 // ============== AUDIT LOGGING ==============
-const auditLogs: InsertAuditLog[] = [];
-const MAX_AUDIT_LOGS = 1000;
-
-function logAudit(action: string, entityType: string, entityId: string | undefined, details: any, req?: Request): void {
-  const log: InsertAuditLog = {
-    action,
-    entityType,
-    entityId,
-    details,
-    ipAddress: req?.ip || req?.headers['x-forwarded-for'] as string || null,
-    userAgent: req?.headers['user-agent'] || null,
-  };
-  
-  auditLogs.unshift(log);
-  
-  // Keep only recent logs in memory
-  if (auditLogs.length > MAX_AUDIT_LOGS) {
-    auditLogs.pop();
+async function logAudit(action: string, entityType: string, entityId: string | undefined, details: any, req?: Request): Promise<void> {
+  try {
+    const log: InsertAuditLog = {
+      action,
+      entityType,
+      entityId,
+      details,
+      ipAddress: req?.ip || req?.headers['x-forwarded-for'] as string || null,
+      userAgent: req?.headers['user-agent'] || null,
+    };
+    
+    await storage.addAuditLog(log);
+  } catch (error) {
+    console.error("Failed to write audit log:", error);
   }
 }
 
@@ -450,6 +524,233 @@ export async function registerRoutes(
 ): Promise<Server> {
   // Apply rate limiting to all API routes
   app.use('/api', rateLimitMiddleware);
+  
+  // Add helmet for security headers
+  app.use(helmet({
+    contentSecurityPolicy: false, // Disable for development
+    crossOriginEmbedderPolicy: false,
+  }));
+  
+  // P0-04: CORS configuration - restrict to UI domain only
+  // In development, allow all origins from Replit
+  // In production, restrict to deployed app domain
+  app.use(cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like curl, server-side requests)
+      if (!origin) return callback(null, true);
+      
+      // In development, allow all Replit domains and localhost
+      if (process.env.NODE_ENV !== 'production') {
+        if (origin.includes('replit') || 
+            origin.includes('localhost') || 
+            origin.includes('127.0.0.1')) {
+          return callback(null, true);
+        }
+      }
+      
+      // In production, allow replit.app domains
+      if (origin.includes('.replit.app')) {
+        return callback(null, true);
+      }
+      
+      // Block unknown origins in production
+      if (process.env.NODE_ENV === 'production') {
+        return callback(new Error('Not allowed by CORS'));
+      }
+      
+      // In dev, be more permissive
+      callback(null, true);
+    },
+    credentials: true,
+  }));
+
+  // ============== MULTIPART FILE UPLOAD (P0-02) ==============
+  app.post("/api/upload/file", upload.single('file'), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "Không có file được upload" });
+      }
+
+      const file = req.file;
+      const ext = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf('.'));
+      
+      let columns: string[];
+      let rows: DataRow[];
+      
+      // Parse based on file type
+      if (ext === '.csv') {
+        const content = file.buffer.toString('utf-8');
+        const parsed = parseCSVWithPapa(content);
+        columns = parsed.columns;
+        rows = parsed.rows;
+      } else if (ext === '.xlsx' || ext === '.xls') {
+        const parsed = parseExcelFile(file.buffer);
+        columns = parsed.columns;
+        rows = parsed.rows;
+      } else {
+        return res.status(400).json({ error: "Định dạng file không được hỗ trợ" });
+      }
+
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "Không tìm thấy dữ liệu trong file" });
+      }
+
+      // Schema detection
+      const schemaCheck = isSchemaDescriptionFile(columns, rows);
+      if (schemaCheck.isSchema) {
+        return res.status(400).json({ 
+          error: `File này là mô tả schema/dictionary, không phải dataset thực. ${schemaCheck.reason}`,
+          isSchemaFile: true 
+        });
+      }
+
+      // Schema Detection + Column Normalization
+      const columnMappings = findColumnMapping(columns);
+      const { type: schemaType, confidence: schemaConfidence } = detectSchemaType(columns);
+      
+      // Convert rows to 2D array for feature analysis
+      const dataArray = rows.map(row => columns.map(col => row[col]));
+      const featureReport = analyzeFeatureUsage(columns, dataArray, schemaType);
+      
+      // Normalize dataset columns
+      const normalizedResult = normalizeDataset(columns, dataArray, columnMappings);
+      const normalizedColumns = normalizedResult.columns;
+      
+      // Get recommended models
+      const recommendedModels = getModelForSchema(schemaType);
+
+      // Feature validation
+      const featureValidation = validateFeatureContract(columns);
+      const mode: import("@shared/schema").DetectionMode = featureValidation.hasLabelColumn ? "supervised" : "unlabeled";
+
+      // Get label statistics
+      let labelStats: Record<string, { count: number; percentage: number; category: string }> = {};
+      if (featureValidation.hasLabelColumn && featureValidation.detectedLabelColumn) {
+        const labelIndex = columns.indexOf(featureValidation.detectedLabelColumn);
+        if (labelIndex >= 0) {
+          labelStats = getLabelStats(dataArray, labelIndex);
+        }
+      }
+
+      // Feature mapping
+      const featureMapping = buildFeatureMapping(columns);
+      const featureMappingObj = Object.fromEntries(Array.from(featureMapping.entries()));
+      const detectedFeatureTypes = Array.from(new Set(featureMapping.values()));
+
+      // Clean data
+      const { cleanedRows, missingValues, duplicates, outliers } = cleanData(rows, columns);
+      
+      // Feature statistics
+      const featureStats = getFeatureStatistics(cleanedRows, featureMapping);
+
+      const datasetId = randomUUID();
+      const dataset: Dataset = {
+        id: datasetId,
+        name: file.originalname,
+        originalRowCount: rows.length,
+        cleanedRowCount: cleanedRows.length,
+        columns,
+        uploadedAt: new Date().toISOString(),
+        isProcessed: true,
+        mode,
+        labelColumn: featureValidation.detectedLabelColumn || undefined,
+        featureValidation,
+        dataQuality: {
+          missingValues,
+          duplicates,
+          outliers,
+          cleanedPercentage: (cleanedRows.length / rows.length) * 100,
+        },
+      };
+
+      const previewData = cleanedRows.slice(0, 10);
+
+      await storage.setDataset(dataset, previewData);
+      await storage.clearResults();
+
+      (global as any).__datasetRows = cleanedRows;
+      (global as any).__datasetMode = mode;
+
+      // Build warnings
+      const warnings: string[] = [];
+      const schemaTypeNames: Record<SchemaType, string> = {
+        'cicflowmeter': 'CICFlowMeter',
+        'event_log': 'Event/Log',
+        'unknown': 'Không xác định'
+      };
+      warnings.push(`📋 Schema: ${schemaTypeNames[schemaType]} (${schemaConfidence.toFixed(0)}% tin cậy)`);
+      
+      if (mode === "unlabeled") {
+        warnings.push("🔍 Mode: UNLABELED - Không tìm thấy cột label.");
+      } else {
+        warnings.push(`✓ Mode: SUPERVISED - Phát hiện cột label: "${featureValidation.detectedLabelColumn}".`);
+      }
+
+      // Audit log
+      await logAudit("upload", "dataset", datasetId, { 
+        name: file.originalname, 
+        rowCount: rows.length, 
+        cleanedCount: cleanedRows.length,
+        mode,
+        schemaType,
+        uploadMethod: "multipart"
+      }, req);
+
+      res.json({ 
+        datasetId,
+        dataset, 
+        previewData, 
+        warning: warnings.join(" | "),
+        validationResult: {
+          mode,
+          featureValidation,
+          confidenceLevel: featureValidation.confidenceLevel,
+        },
+        schemaDetection: {
+          schemaType,
+          schemaConfidence,
+          recommendedModels,
+          columnMappings,
+          normalizedColumns,
+        },
+        featureReport: {
+          foundFeatures: featureReport.foundFeatures,
+          missingFeatures: featureReport.missingFeatures,
+          foundPercentage: featureReport.foundPercentage,
+          nanCount: featureReport.nanCount,
+          nanPercentage: featureReport.nanPercentage,
+          infCount: featureReport.infCount,
+          infPercentage: featureReport.infPercentage,
+          isReliable: featureReport.isReliable,
+          warnings: featureReport.warnings,
+        },
+        labelStats,
+        featureAnalysis: {
+          mapping: featureMappingObj,
+          detectedTypes: detectedFeatureTypes,
+          statistics: featureStats.featureStats,
+          anomalyIndicators: featureStats.anomalyIndicators,
+        }
+      });
+    } catch (error: any) {
+      console.error("Upload error:", error);
+      if (error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: "File quá lớn. Giới hạn: 50MB" });
+      }
+      res.status(500).json({ error: error.message || "Lỗi khi xử lý file" });
+    }
+  });
+
+  // Error handler for multer
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: "File quá lớn. Giới hạn: 50MB" });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    next(err);
+  });
 
   // ============== EXPORT ENDPOINTS ==============
   app.get("/api/export/csv", async (req, res) => {
@@ -587,16 +888,21 @@ export async function registerRoutes(
 
   // ============== AUDIT LOGS ==============
   app.get("/api/audit-logs", async (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-    const offset = parseInt(req.query.offset as string) || 0;
-    
-    const logs = auditLogs.slice(offset, offset + limit);
-    res.json({
-      logs,
-      total: auditLogs.length,
-      limit,
-      offset,
-    });
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      const logs = await storage.getAuditLogs(limit, offset);
+      res.json({
+        logs,
+        total: logs.length,
+        limit,
+        offset,
+      });
+    } catch (error) {
+      console.error("Failed to get audit logs:", error);
+      res.status(500).json({ error: "Failed to get audit logs" });
+    }
   });
 
   // ============== CACHE MANAGEMENT ==============
@@ -649,186 +955,15 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/upload", async (req, res) => {
-    try {
-      const parsed = uploadDatasetSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({ error: parsed.error.message });
-      }
-
-      const { name, data } = parsed.data;
-      const { columns, rows } = parseDataContent(data, name);
-
-      if (rows.length === 0) {
-        return res.status(400).json({ error: "Không tìm thấy dữ liệu trong file. Hãy đảm bảo file có định dạng CSV hoặc Excel (.xlsx) hợp lệ." });
-      }
-
-      // Epic 1.1: Phát hiện file mô tả schema
-      const schemaCheck = isSchemaDescriptionFile(columns, rows);
-      if (schemaCheck.isSchema) {
-        return res.status(400).json({ 
-          error: `File này là mô tả schema/dictionary, không phải dataset thực. ${schemaCheck.reason} Hãy upload file dữ liệu records thực.`,
-          isSchemaFile: true 
-        });
-      }
-
-      // Schema Detection + Column Normalization
-      const columnMappings = findColumnMapping(columns);
-      const { type: schemaType, confidence: schemaConfidence } = detectSchemaType(columns);
-      
-      // Convert rows to 2D array for feature analysis
-      const dataArray = rows.map(row => columns.map(col => row[col]));
-      const featureReport = analyzeFeatureUsage(columns, dataArray, schemaType);
-      
-      // Normalize dataset columns and labels
-      const normalizedResult = normalizeDataset(columns, dataArray, columnMappings);
-      const normalizedColumns = normalizedResult.columns;
-      
-      // Get recommended models based on schema type
-      const recommendedModels = getModelForSchema(schemaType);
-
-      // Epic 1.2: Validate Feature Contract và chọn Mode
-      const featureValidation = validateFeatureContract(columns);
-      const mode: import("@shared/schema").DetectionMode = featureValidation.hasLabelColumn ? "supervised" : "unlabeled";
-
-      // Get label statistics if has label column
-      let labelStats: Record<string, { count: number; percentage: number; category: string }> = {};
-      if (featureValidation.hasLabelColumn && featureValidation.detectedLabelColumn) {
-        const labelIndex = columns.indexOf(featureValidation.detectedLabelColumn);
-        if (labelIndex >= 0) {
-          labelStats = getLabelStats(dataArray, labelIndex);
-        }
-      }
-
-      // Smart Feature Mapping - tự động nhận diện các cột feature
-      const featureMapping = buildFeatureMapping(columns);
-      const featureMappingObj = Object.fromEntries(Array.from(featureMapping.entries()));
-      const detectedFeatureTypes = Array.from(new Set(featureMapping.values()));
-
-      const { cleanedRows, missingValues, duplicates, outliers } = cleanData(rows, columns);
-      
-      // Get feature statistics for the dataset
-      const featureStats = getFeatureStatistics(cleanedRows, featureMapping);
-
-      const dataset: Dataset = {
-        id: randomUUID(),
-        name,
-        originalRowCount: rows.length,
-        cleanedRowCount: cleanedRows.length,
-        columns,
-        uploadedAt: new Date().toISOString(),
-        isProcessed: true,
-        mode,  // Thêm mode vào dataset
-        labelColumn: featureValidation.detectedLabelColumn || undefined,
-        featureValidation,  // Thêm feature validation
-        dataQuality: {
-          missingValues,
-          duplicates,
-          outliers,
-          cleanedPercentage: (cleanedRows.length / rows.length) * 100,
-        },
-      };
-
-      const previewData = cleanedRows.slice(0, 10);
-
-      await storage.setDataset(dataset, previewData);
-      await storage.clearResults();
-
-      (global as any).__datasetRows = cleanedRows;
-      (global as any).__datasetMode = mode;
-
-      // Tạo warnings dựa trên validation
-      const warnings: string[] = [];
-      
-      // Schema type warning
-      const schemaTypeNames: Record<SchemaType, string> = {
-        'cicflowmeter': 'CICFlowMeter',
-        'event_log': 'Event/Log',
-        'unknown': 'Không xác định'
-      };
-      warnings.push(`📋 Schema: ${schemaTypeNames[schemaType]} (${schemaConfidence.toFixed(0)}% tin cậy)`);
-      
-      if (mode === "unlabeled") {
-        warnings.push("🔍 Mode: UNLABELED - Không tìm thấy cột label. Sẽ chạy inference và hiển thị score/cảnh báo thay vì accuracy.");
-      } else {
-        warnings.push(`✓ Mode: SUPERVISED - Phát hiện cột label: "${featureValidation.detectedLabelColumn}". Sẽ train và đánh giá chuẩn.`);
-      }
-      
-      // Feature report warnings
-      if (!featureReport.isReliable) {
-        warnings.push(`⚠️ Kết quả có thể không đáng tin cậy`);
-      }
-      
-      for (const warn of featureReport.warnings) {
-        warnings.push(`⚠️ ${warn}`);
-      }
-      
-      if (featureValidation.missingRequired.length > 0 && featureReport.warnings.length === 0) {
-        warnings.push(`⚠️ Thiếu features quan trọng: ${featureValidation.missingRequired.join(", ")}. ${featureValidation.confidenceReason}`);
-      }
-      
-      if (featureValidation.confidenceLevel === "low") {
-        warnings.push("⚠️ Độ tin cậy THẤP: Dataset thiếu nhiều features cần thiết cho phát hiện DDoS chính xác.");
-      }
-
-      // Add feature detection info
-      if (detectedFeatureTypes.length > 0) {
-        warnings.push(`📊 Phát hiện ${detectedFeatureTypes.length} loại feature: ${detectedFeatureTypes.slice(0, 5).join(", ")}${detectedFeatureTypes.length > 5 ? "..." : ""}`);
-      }
-      
-      // Add anomaly indicators from feature statistics
-      if (featureStats.anomalyIndicators.length > 0) {
-        warnings.push(`⚠️ Dấu hiệu bất thường: ${featureStats.anomalyIndicators.slice(0, 3).join(", ")}`);
-      }
-
-      res.json({ 
-        dataset, 
-        previewData, 
-        warning: warnings.join(" | "),
-        validationResult: {
-          mode,
-          featureValidation,
-          confidenceLevel: featureValidation.confidenceLevel,
-        },
-        schemaDetection: {
-          schemaType,
-          schemaConfidence,
-          recommendedModels,
-          columnMappings,
-          normalizedColumns,
-        },
-        featureReport: {
-          foundFeatures: featureReport.foundFeatures,
-          missingFeatures: featureReport.missingFeatures,
-          foundPercentage: featureReport.foundPercentage,
-          nanCount: featureReport.nanCount,
-          nanPercentage: featureReport.nanPercentage,
-          infCount: featureReport.infCount,
-          infPercentage: featureReport.infPercentage,
-          isReliable: featureReport.isReliable,
-          warnings: featureReport.warnings,
-        },
-        labelStats,
-        featureAnalysis: {
-          mapping: featureMappingObj,
-          detectedTypes: detectedFeatureTypes,
-          statistics: featureStats.featureStats,
-          anomalyIndicators: featureStats.anomalyIndicators,
-        }
-      });
-
-      // Audit log for upload
-      logAudit("upload", "dataset", dataset.id, { 
-        name, 
-        rowCount: rows.length, 
-        cleanedCount: cleanedRows.length,
-        mode,
-        schemaType 
-      }, req);
-    } catch (error) {
-      console.error("Upload error:", error);
-      res.status(500).json({ error: "Failed to process dataset" });
-    }
+  // P0-02: DEPRECATED - Legacy JSON upload endpoint removed for security
+  // All uploads must use POST /api/upload/file with FormData (multipart/form-data)
+  app.post("/api/upload", (_req, res) => {
+    return res.status(410).json({ 
+      error: "Endpoint không còn được hỗ trợ. Vui lòng sử dụng POST /api/upload/file với FormData (multipart/form-data).",
+      deprecated: true,
+      newEndpoint: "/api/upload/file",
+      message: "Use FormData with 'file' field for file upload"
+    });
   });
 
   app.get("/api/results", async (req, res) => {
