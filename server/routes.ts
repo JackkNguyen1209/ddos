@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { analyzeWithModel, getFeatureColumns, runAnomalyDetection, generateUnlabeledReport } from "./ml-algorithms";
+import { analyzeWithModel, getFeatureColumns, runAnomalyDetection, generateUnlabeledReport, buildFeatureMapping, getFeatureStatistics, analyzeRowForAttack } from "./ml-algorithms";
 import { uploadDatasetSchema, analyzeRequestSchema, type DataRow, type Dataset } from "@shared/schema";
 import { randomUUID } from "crypto";
 import * as XLSX from "xlsx";
@@ -376,7 +376,15 @@ export async function registerRoutes(
       const featureValidation = validateFeatureContract(columns);
       const mode: import("@shared/schema").DetectionMode = featureValidation.hasLabelColumn ? "supervised" : "unlabeled";
 
+      // Smart Feature Mapping - tự động nhận diện các cột feature
+      const featureMapping = buildFeatureMapping(columns);
+      const featureMappingObj = Object.fromEntries(Array.from(featureMapping.entries()));
+      const detectedFeatureTypes = Array.from(new Set(featureMapping.values()));
+
       const { cleanedRows, missingValues, duplicates, outliers } = cleanData(rows, columns);
+      
+      // Get feature statistics for the dataset
+      const featureStats = getFeatureStatistics(cleanedRows, featureMapping);
 
       const dataset: Dataset = {
         id: randomUUID(),
@@ -422,6 +430,16 @@ export async function registerRoutes(
         warnings.push("⚠️ Độ tin cậy THẤP: Dataset thiếu nhiều features cần thiết cho phát hiện DDoS chính xác.");
       }
 
+      // Add feature detection info
+      if (detectedFeatureTypes.length > 0) {
+        warnings.push(`📊 Phát hiện ${detectedFeatureTypes.length} loại feature: ${detectedFeatureTypes.slice(0, 5).join(", ")}${detectedFeatureTypes.length > 5 ? "..." : ""}`);
+      }
+      
+      // Add anomaly indicators from feature statistics
+      if (featureStats.anomalyIndicators.length > 0) {
+        warnings.push(`⚠️ Dấu hiệu bất thường: ${featureStats.anomalyIndicators.slice(0, 3).join(", ")}`);
+      }
+
       res.json({ 
         dataset, 
         previewData, 
@@ -430,6 +448,12 @@ export async function registerRoutes(
           mode,
           featureValidation,
           confidenceLevel: featureValidation.confidenceLevel,
+        },
+        featureAnalysis: {
+          mapping: featureMappingObj,
+          detectedTypes: detectedFeatureTypes,
+          statistics: featureStats.featureStats,
+          anomalyIndicators: featureStats.anomalyIndicators,
         }
       });
     } catch (error) {

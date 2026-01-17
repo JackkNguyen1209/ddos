@@ -898,9 +898,314 @@ export async function analyzeWithModel(
   };
 }
 
+// ============== SMART FEATURE DETECTION & MAPPING ==============
+
+// Network traffic feature patterns for auto-detection
+const FEATURE_PATTERNS = {
+  // Packet features
+  fwd_packets: ["fwd_pkts", "fwd_packets", "fwdpackets", "forward_packets", "tot_fwd_pkts", "total_fwd_packets"],
+  bwd_packets: ["bwd_pkts", "bwd_packets", "bwdpackets", "backward_packets", "tot_bwd_pkts", "total_bwd_packets"],
+  fwd_packet_length: ["fwd_pkt_len", "fwd_packet_len", "fwdpktlen", "fwd_seg_size", "fwd_packet_length", "fwd_pkt_length_total", "fwd_packets_length_total"],
+  bwd_packet_length: ["bwd_pkt_len", "bwd_packet_len", "bwdpktlen", "bwd_seg_size", "bwd_packet_length", "bwd_pkt_length_total"],
+  packet_length_total: ["pkt_len_total", "totlen_fwd_pkts", "totlen_bwd_pkts", "flow_bytes", "total_length_of_fwd_packets"],
+  
+  // Flow features
+  flow_duration: ["flow_duration", "duration", "flow_time", "flowduration"],
+  flow_bytes_per_sec: ["flow_byts_s", "flow_bytes_s", "flow_bytes_per_sec", "bytes_per_second", "flowbytespersec"],
+  flow_packets_per_sec: ["flow_pkts_s", "flow_packets_s", "flow_packets_per_sec", "packets_per_second", "flowpktspersec"],
+  
+  // IAT (Inter-Arrival Time) features
+  flow_iat_mean: ["flow_iat_mean", "flowiatmean", "iat_mean"],
+  flow_iat_std: ["flow_iat_std", "flowiatstd", "iat_std"],
+  flow_iat_max: ["flow_iat_max", "flowiatmax", "iat_max"],
+  flow_iat_min: ["flow_iat_min", "flowiatmin", "iat_min"],
+  fwd_iat_mean: ["fwd_iat_mean", "fwdiatmean"],
+  bwd_iat_mean: ["bwd_iat_mean", "bwdiatmean"],
+  
+  // Header features
+  fwd_header_length: ["fwd_header_length", "fwd_header_len", "fwdheaderlen", "fwd_seg_size_min"],
+  bwd_header_length: ["bwd_header_length", "bwd_header_len", "bwdheaderlen"],
+  
+  // Flag features
+  syn_flag: ["syn_flag", "syn_flag_cnt", "synflag", "syn_count"],
+  ack_flag: ["ack_flag", "ack_flag_cnt", "ackflag", "ack_count"],
+  fin_flag: ["fin_flag", "fin_flag_cnt", "finflag", "fin_count"],
+  rst_flag: ["rst_flag", "rst_flag_cnt", "rstflag", "rst_count"],
+  psh_flag: ["psh_flag", "psh_flag_cnt", "pshflag", "push_count"],
+  urg_flag: ["urg_flag", "urg_flag_cnt", "urgflag", "urg_count"],
+  
+  // Network features
+  src_port: ["src_port", "srcport", "source_port", "sport"],
+  dst_port: ["dst_port", "dstport", "dest_port", "destination_port", "dport"],
+  src_ip: ["src_ip", "srcip", "source_ip", "src_addr"],
+  dst_ip: ["dst_ip", "dstip", "dest_ip", "dst_addr", "destination_ip"],
+  protocol: ["protocol", "proto", "ip_protocol"],
+  
+  // Statistics
+  pkt_size_avg: ["pkt_size_avg", "packet_size_avg", "avg_pkt_size", "packet_length_mean"],
+  pkt_size_std: ["pkt_size_std", "packet_size_std", "std_pkt_size", "packet_length_std"],
+  init_win_bytes_fwd: ["init_win_bytes_forward", "init_win_bytes_fwd", "init_fwd_win_byts"],
+  init_win_bytes_bwd: ["init_win_bytes_backward", "init_win_bytes_bwd", "init_bwd_win_byts"],
+  
+  // Active/Idle features
+  active_mean: ["active_mean", "activemean", "act_data_pkt_fwd"],
+  idle_mean: ["idle_mean", "idlemean"],
+  subflow_fwd_pkts: ["subflow_fwd_packets", "subflow_fwd_pkts"],
+  subflow_bwd_pkts: ["subflow_bwd_packets", "subflow_bwd_pkts"],
+};
+
+// Map column name to feature category
+export function mapColumnToFeature(columnName: string): string | null {
+  const lowerCol = columnName.toLowerCase().replace(/[_\s-]/g, "");
+  
+  for (const [featureType, patterns] of Object.entries(FEATURE_PATTERNS)) {
+    for (const pattern of patterns) {
+      const lowerPattern = pattern.toLowerCase().replace(/[_\s-]/g, "");
+      if (lowerCol.includes(lowerPattern) || lowerPattern.includes(lowerCol)) {
+        return featureType;
+      }
+    }
+  }
+  return null;
+}
+
+// Analyze data row to determine if it's an attack based on actual feature values
+export function analyzeRowForAttack(row: DataRow, featureMapping: Map<string, string>): {
+  isAttack: boolean;
+  attackType: DDoSAttackType;
+  confidence: number;
+  reasons: string[];
+} {
+  const reasons: string[] = [];
+  let attackScore = 0;
+  let attackType: DDoSAttackType = "unknown";
+  
+  // Get actual values from mapped features
+  const getValue = (featureType: string): number => {
+    const entries = Array.from(featureMapping.entries());
+    for (const [col, mappedType] of entries) {
+      if (mappedType === featureType) {
+        const val = row[col];
+        return typeof val === "number" ? val : parseFloat(String(val)) || 0;
+      }
+    }
+    return 0;
+  };
+  
+  const fwdPackets = getValue("fwd_packets");
+  const bwdPackets = getValue("bwd_packets");
+  const fwdPacketLength = getValue("fwd_packet_length");
+  const bwdPacketLength = getValue("bwd_packet_length");
+  const flowDuration = getValue("flow_duration");
+  const flowBytesPerSec = getValue("flow_bytes_per_sec");
+  const flowPacketsPerSec = getValue("flow_packets_per_sec");
+  const flowIatMean = getValue("flow_iat_mean");
+  const synFlag = getValue("syn_flag");
+  const ackFlag = getValue("ack_flag");
+  const finFlag = getValue("fin_flag");
+  const rstFlag = getValue("rst_flag");
+  const dstPort = getValue("dst_port");
+  const srcPort = getValue("src_port");
+  const protocol = getValue("protocol");
+  const pktSizeAvg = getValue("pkt_size_avg");
+  const initWinFwd = getValue("init_win_bytes_fwd");
+  
+  // High packet rate detection (potential volumetric attack)
+  if (flowPacketsPerSec > 1000) {
+    attackScore += 3;
+    reasons.push(`Tốc độ packet rất cao: ${flowPacketsPerSec.toFixed(0)} pkts/s`);
+  } else if (flowPacketsPerSec > 100) {
+    attackScore += 1;
+    reasons.push(`Tốc độ packet cao: ${flowPacketsPerSec.toFixed(0)} pkts/s`);
+  }
+  
+  // High bytes per second (bandwidth exhaustion)
+  if (flowBytesPerSec > 100000000) { // > 100MB/s
+    attackScore += 3;
+    reasons.push(`Bandwidth rất cao: ${(flowBytesPerSec / 1000000).toFixed(1)} MB/s`);
+  } else if (flowBytesPerSec > 10000000) { // > 10MB/s
+    attackScore += 2;
+    reasons.push(`Bandwidth cao: ${(flowBytesPerSec / 1000000).toFixed(1)} MB/s`);
+  }
+  
+  // Very short flow duration with many packets (burst attack)
+  if (flowDuration < 1000 && fwdPackets > 50) {
+    attackScore += 2;
+    reasons.push(`Burst: ${fwdPackets} packets trong ${flowDuration}ms`);
+  }
+  
+  // SYN Flood detection
+  if (synFlag > 0 && ackFlag === 0 && finFlag === 0) {
+    attackScore += 3;
+    attackType = "syn_flood";
+    reasons.push("SYN flag cao, không có ACK/FIN (SYN Flood)");
+  }
+  
+  // RST flood
+  if (rstFlag > 10) {
+    attackScore += 2;
+    reasons.push(`Nhiều RST flag: ${rstFlag}`);
+  }
+  
+  // Asymmetric traffic (potential reflection/amplification)
+  if (bwdPacketLength > fwdPacketLength * 10 && bwdPacketLength > 10000) {
+    attackScore += 3;
+    reasons.push(`Amplification detected: Response ${bwdPacketLength} >> Request ${fwdPacketLength}`);
+    
+    // Check specific amplification attack types
+    if (dstPort === 53 || srcPort === 53) {
+      attackType = "dns_amplification";
+      reasons.push("Cổng DNS 53 - DNS Amplification");
+    } else if (dstPort === 123 || srcPort === 123) {
+      attackType = "ntp_amplification";
+      reasons.push("Cổng NTP 123 - NTP Amplification");
+    } else if (dstPort === 1900 || srcPort === 1900) {
+      attackType = "ssdp_amplification";
+      reasons.push("Cổng SSDP 1900 - SSDP Amplification");
+    } else if (dstPort === 11211 || srcPort === 11211) {
+      attackType = "memcached_amplification";
+      reasons.push("Cổng Memcached 11211 - Memcached Amplification");
+    }
+  }
+  
+  // Very low IAT (fast packet transmission)
+  if (flowIatMean < 10 && fwdPackets > 20) {
+    attackScore += 2;
+    reasons.push(`IAT rất thấp: ${flowIatMean.toFixed(2)}ms giữa các packet`);
+  }
+  
+  // Small packet flood
+  if (fwdPackets > 100 && pktSizeAvg < 100) {
+    attackScore += 2;
+    reasons.push(`Small packet flood: ${fwdPackets} packets, avg size ${pktSizeAvg.toFixed(0)} bytes`);
+  }
+  
+  // Protocol-based detection
+  if (protocol === 17 || String(row["protocol"]).toLowerCase() === "udp") {
+    if (flowPacketsPerSec > 500) {
+      attackScore += 2;
+      if (attackType === "unknown") attackType = "udp_flood";
+      reasons.push("UDP flood pattern detected");
+    }
+  } else if (protocol === 1 || String(row["protocol"]).toLowerCase() === "icmp") {
+    if (fwdPackets > 50) {
+      attackScore += 2;
+      if (attackType === "unknown") attackType = "icmp_flood";
+      reasons.push("ICMP flood pattern detected");
+    }
+  }
+  
+  // Port-based attack classification
+  if (attackType === "unknown") {
+    if (dstPort === 22) {
+      if (fwdPackets > 20 && flowDuration < 5000) {
+        attackType = "ssh_bruteforce";
+        attackScore += 2;
+        reasons.push("SSH bruteforce pattern: nhiều connection attempt");
+      }
+    } else if (dstPort === 21) {
+      if (fwdPackets > 20) {
+        attackType = "ftp_bruteforce";
+        attackScore += 2;
+        reasons.push("FTP bruteforce pattern");
+      }
+    } else if (dstPort === 23) {
+      attackType = "telnet_bruteforce";
+      attackScore += 2;
+      reasons.push("Telnet attack - nguy cơ IoT botnet");
+    } else if (dstPort === 3389) {
+      if (fwdPackets > 10) {
+        attackType = "rdp_attack";
+        attackScore += 2;
+        reasons.push("RDP attack pattern");
+      }
+    } else if (dstPort === 80 || dstPort === 443 || dstPort === 8080) {
+      if (fwdPackets > 100 && flowPacketsPerSec > 50) {
+        attackType = "http_flood";
+        attackScore += 2;
+        reasons.push(`HTTP flood: ${fwdPackets} requests`);
+      }
+    }
+  }
+  
+  // Calculate confidence
+  const confidence = Math.min(0.95, 0.3 + (attackScore * 0.1));
+  const isAttack = attackScore >= 3;
+  
+  if (attackType === "unknown" && isAttack) {
+    // Try to classify based on primary indicators
+    if (flowBytesPerSec > 10000000) {
+      attackType = "udp_flood";
+    } else if (flowPacketsPerSec > 500) {
+      attackType = "syn_flood";
+    }
+  }
+  
+  return { isAttack, attackType, confidence, reasons };
+}
+
+// Build feature mapping from columns
+export function buildFeatureMapping(columns: string[]): Map<string, string> {
+  const mapping = new Map<string, string>();
+  
+  for (const col of columns) {
+    const featureType = mapColumnToFeature(col);
+    if (featureType) {
+      mapping.set(col, featureType);
+    }
+  }
+  
+  return mapping;
+}
+
+// Get feature statistics for unlabeled data analysis
+export function getFeatureStatistics(data: DataRow[], featureMapping: Map<string, string>): {
+  detectedFeatures: string[];
+  featureStats: Record<string, { min: number; max: number; mean: number; std: number }>;
+  anomalyIndicators: string[];
+} {
+  const detectedFeatures: string[] = Array.from(new Set(featureMapping.values()));
+  const featureStats: Record<string, { min: number; max: number; mean: number; std: number }> = {};
+  const anomalyIndicators: string[] = [];
+  
+  // Calculate statistics for each mapped feature
+  const entries = Array.from(featureMapping.entries());
+  for (const [col, featureType] of entries) {
+    const values = data.map(row => {
+      const val = row[col];
+      return typeof val === "number" ? val : parseFloat(String(val)) || 0;
+    }).filter(v => !isNaN(v));
+    
+    if (values.length > 0) {
+      const mean = values.reduce((a, b) => a + b, 0) / values.length;
+      const variance = values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / values.length;
+      
+      featureStats[featureType] = {
+        min: Math.min(...values),
+        max: Math.max(...values),
+        mean,
+        std: Math.sqrt(variance),
+      };
+      
+      // Check for anomaly indicators based on feature statistics
+      if (featureType === "flow_packets_per_sec" && mean > 500) {
+        anomalyIndicators.push(`Tốc độ packet trung bình cao: ${mean.toFixed(0)} pkts/s`);
+      }
+      if (featureType === "flow_bytes_per_sec" && mean > 10000000) {
+        anomalyIndicators.push(`Bandwidth trung bình cao: ${(mean / 1000000).toFixed(1)} MB/s`);
+      }
+      if (featureType === "fwd_packets" && mean > 100) {
+        anomalyIndicators.push(`Nhiều forward packets: avg ${mean.toFixed(0)}`);
+      }
+    }
+  }
+  
+  return { detectedFeatures, featureStats, anomalyIndicators };
+}
+
 export function getFeatureColumns(columns: string[]): string[] {
   const labelColumns = ["label", "class", "attack", "target", "Label", "Class", "Attack", "Target", "attack_cat", "category"];
-  const idColumns = ["id", "ID", "Id", "index", "Index"];
+  const idColumns = ["id", "ID", "Id", "index", "Index", "flow_id", "timestamp", "src_ip", "dst_ip", "src_port"];
   
   return columns.filter(
     (col) =>
