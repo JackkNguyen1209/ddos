@@ -298,47 +298,113 @@ export const ML_MODELS: MLModel[] = [
   },
 ];
 
-// Detailed algorithm explanations
+// Detailed algorithm explanations with formulas
 export const ALGORITHM_DETAILS: Record<string, {
   howItWorks: string;
+  formula: string;
+  formulaExplanation: string;
+  steps: string[];
   strengths: string[];
   weaknesses: string[];
   bestFor: string;
+  parameters: string[];
 }> = {
   decision_tree: {
-    howItWorks: "Cây quyết định xây dựng một cấu trúc cây bằng cách chia dữ liệu theo các ngưỡng của từng đặc trưng. Tại mỗi node, thuật toán chọn đặc trưng và ngưỡng tối ưu để phân chia dữ liệu thành 2 nhóm sao cho mỗi nhóm càng thuần nhất càng tốt (sử dụng chỉ số Gini hoặc Information Gain). Quá trình này lặp lại cho đến khi đạt độ sâu tối đa hoặc dữ liệu đủ thuần nhất.",
+    howItWorks: "Cây quyết định xây dựng một cấu trúc cây bằng cách chia dữ liệu theo các ngưỡng của từng đặc trưng. Tại mỗi node, thuật toán chọn đặc trưng và ngưỡng tối ưu để phân chia dữ liệu thành 2 nhóm sao cho mỗi nhóm càng thuần nhất càng tốt.",
+    formula: "Gini(D) = 1 - Σ(pᵢ)²",
+    formulaExplanation: "Gini Index đo độ không thuần nhất của tập dữ liệu D. pᵢ là tỷ lệ mẫu thuộc lớp i. Gini = 0 nghĩa là tập dữ liệu hoàn toàn thuần nhất (chỉ có 1 lớp). Gini = 0.5 là tối đa (2 lớp bằng nhau).",
+    steps: [
+      "1. Tính Gini Index cho mỗi đặc trưng và ngưỡng có thể",
+      "2. Chọn đặc trưng và ngưỡng có Gini thấp nhất (thuần nhất nhất)",
+      "3. Chia dữ liệu thành 2 nhánh: <= ngưỡng và > ngưỡng",
+      "4. Lặp lại cho mỗi nhánh đến khi đạt điều kiện dừng",
+      "5. Gán nhãn lá = lớp chiếm đa số trong nhánh"
+    ],
     strengths: ["Dễ hiểu và giải thích", "Xử lý được cả dữ liệu số và phân loại", "Không cần chuẩn hóa dữ liệu"],
     weaknesses: ["Dễ bị overfitting với dữ liệu nhiễu", "Nhạy cảm với thay đổi nhỏ trong dữ liệu", "Có thể tạo cây quá phức tạp"],
     bestFor: "Phát hiện các pattern rõ ràng trong traffic như SYN flood với ngưỡng cố định",
+    parameters: ["Độ sâu tối đa: 10", "Số mẫu tối thiểu để chia: 2"]
   },
   random_forest: {
-    howItWorks: "Random Forest tạo nhiều cây quyết định độc lập (trong trường hợp này là 15 cây), mỗi cây được huấn luyện trên một tập con ngẫu nhiên của dữ liệu (bootstrap sampling). Khi dự đoán, mỗi cây đưa ra một phiếu bầu, và kết quả cuối cùng là lớp có nhiều phiếu nhất (majority voting). Điều này giúp giảm overfitting và tăng độ ổn định.",
+    howItWorks: "Random Forest tạo nhiều cây quyết định độc lập, mỗi cây được huấn luyện trên một tập con ngẫu nhiên của dữ liệu (bootstrap sampling). Khi dự đoán, mỗi cây đưa ra một phiếu bầu, và kết quả cuối cùng là lớp có nhiều phiếu nhất.",
+    formula: "ŷ = mode(h₁(x), h₂(x), ..., hₙ(x))",
+    formulaExplanation: "Kết quả dự đoán ŷ là mode (giá trị xuất hiện nhiều nhất) của các dự đoán từ n cây quyết định h₁, h₂, ..., hₙ. Đây là majority voting - lớp nào được nhiều cây chọn nhất sẽ là kết quả.",
+    steps: [
+      "1. Tạo n tập dữ liệu bootstrap (lấy mẫu có hoàn lại)",
+      "2. Huấn luyện 1 cây quyết định trên mỗi tập bootstrap",
+      "3. Mỗi cây chỉ xét một tập con đặc trưng ngẫu nhiên tại mỗi node",
+      "4. Khi dự đoán: cho x qua tất cả n cây",
+      "5. Kết quả = lớp được nhiều cây chọn nhất (majority vote)"
+    ],
     strengths: ["Giảm overfitting so với cây đơn lẻ", "Ổn định với dữ liệu nhiễu", "Có thể đánh giá tầm quan trọng của đặc trưng"],
     weaknesses: ["Chậm hơn cây đơn lẻ", "Khó giải thích hơn", "Tốn nhiều bộ nhớ"],
     bestFor: "Phát hiện DDoS với nhiều loại tấn công khác nhau nhờ tính đa dạng của các cây",
+    parameters: ["Số cây: 15", "Độ sâu mỗi cây: 8", "Bootstrap sampling: có"]
   },
   knn: {
-    howItWorks: "K-Nearest Neighbors (K=5) phân loại một mẫu dựa trên 5 điểm dữ liệu gần nhất với nó trong không gian đặc trưng. Khoảng cách được tính bằng Euclidean distance trên các đặc trưng đã chuẩn hóa. Mẫu mới được gán nhãn của lớp chiếm đa số trong 5 láng giềng gần nhất.",
-    strengths: ["Đơn giản, không cần huấn luyện", "Linh hoạt với mọi hình dạng dữ liệu", "Dễ hiểu trực quan"],
-    weaknesses: ["Chậm với dataset lớn", "Nhạy cảm với đặc trưng không liên quan", "Cần chuẩn hóa dữ liệu"],
+    howItWorks: "K-Nearest Neighbors phân loại một mẫu dựa trên K điểm dữ liệu gần nhất với nó trong không gian đặc trưng. Khoảng cách được tính bằng Euclidean distance. Mẫu mới được gán nhãn của lớp chiếm đa số trong K láng giềng.",
+    formula: "d(x,y) = √[Σ(xᵢ - yᵢ)²]",
+    formulaExplanation: "Euclidean distance d(x,y) là căn bậc hai của tổng bình phương chênh lệch giữa các đặc trưng của điểm x và y. Điểm nào có d nhỏ nhất là láng giềng gần nhất.",
+    steps: [
+      "1. Chuẩn hóa tất cả đặc trưng về khoảng [0,1]",
+      "2. Với mẫu mới x, tính khoảng cách đến tất cả mẫu huấn luyện",
+      "3. Chọn K mẫu có khoảng cách nhỏ nhất (K láng giềng)",
+      "4. Đếm số lượng mỗi lớp trong K láng giềng",
+      "5. Gán x vào lớp chiếm đa số"
+    ],
+    strengths: ["Đơn giản, không cần huấn luyện phức tạp", "Linh hoạt với mọi hình dạng dữ liệu", "Dễ hiểu trực quan"],
+    weaknesses: ["Chậm với dataset lớn (phải tính khoảng cách đến mọi điểm)", "Nhạy cảm với đặc trưng không liên quan", "Cần chuẩn hóa dữ liệu"],
     bestFor: "Phát hiện anomaly khi traffic DDoS tạo thành cluster khác biệt với traffic bình thường",
+    parameters: ["K (số láng giềng): 5", "Metric: Euclidean distance", "Chuẩn hóa: Min-Max scaling"]
   },
   naive_bayes: {
-    howItWorks: "Naive Bayes sử dụng định lý Bayes với giả định các đặc trưng độc lập với nhau (naive assumption). Thuật toán tính xác suất P(DDoS|features) và P(Normal|features) dựa trên phân phối Gaussian của mỗi đặc trưng trong từng lớp, sau đó chọn lớp có xác suất cao hơn.",
+    howItWorks: "Naive Bayes sử dụng định lý Bayes với giả định các đặc trưng độc lập với nhau (naive assumption). Thuật toán tính xác suất thuộc mỗi lớp dựa trên phân phối Gaussian, sau đó chọn lớp có xác suất cao nhất.",
+    formula: "P(C|X) = P(X|C) × P(C) / P(X)",
+    formulaExplanation: "Xác suất hậu nghiệm P(C|X) - xác suất mẫu thuộc lớp C khi biết đặc trưng X - tính bằng: likelihood P(X|C) nhân prior P(C) chia evidence P(X). Với giả định naive: P(X|C) = Π P(xᵢ|C).",
+    steps: [
+      "1. Tính P(C) - xác suất tiên nghiệm của mỗi lớp (tỷ lệ mẫu)",
+      "2. Với mỗi đặc trưng, tính mean và std của mỗi lớp",
+      "3. P(xᵢ|C) = Gaussian(xᵢ; μ, σ²) với μ, σ² của lớp C",
+      "4. P(X|C) = tích các P(xᵢ|C) (giả định độc lập)",
+      "5. Chọn lớp C có P(C|X) cao nhất"
+    ],
     strengths: ["Rất nhanh cả huấn luyện và dự đoán", "Hoạt động tốt với dữ liệu ít", "Ít bị overfitting"],
-    weaknesses: ["Giả định độc lập thường không đúng", "Nhạy cảm với đặc trưng tương quan", "Có thể đưa ra xác suất không chính xác"],
+    weaknesses: ["Giả định độc lập thường không đúng thực tế", "Nhạy cảm với đặc trưng tương quan cao", "Xác suất có thể không chính xác tuyệt đối"],
     bestFor: "Phân loại nhanh traffic realtime khi cần tốc độ cao",
+    parameters: ["Phân phối: Gaussian", "Smoothing: epsilon = 1e-9"]
   },
   logistic_regression: {
-    howItWorks: "Logistic Regression tìm một đường phân cách tuyến tính trong không gian đặc trưng bằng cách học các trọng số (weights) cho mỗi đặc trưng. Sử dụng hàm sigmoid để chuyển đổi tổ hợp tuyến tính thành xác suất (0-1). Huấn luyện bằng gradient descent với 200 iterations và learning rate 0.1.",
-    strengths: ["Đưa ra xác suất dự đoán", "Nhanh và hiệu quả", "Dễ giải thích qua trọng số"],
-    weaknesses: ["Chỉ tìm được ranh giới tuyến tính", "Không bắt được quan hệ phi tuyến", "Cần chuẩn hóa dữ liệu"],
+    howItWorks: "Logistic Regression tìm đường phân cách tuyến tính trong không gian đặc trưng bằng cách học các trọng số (weights). Sử dụng hàm sigmoid để chuyển tổ hợp tuyến tính thành xác suất (0-1). Huấn luyện bằng gradient descent.",
+    formula: "P(y=1|X) = σ(w₀ + w₁x₁ + w₂x₂ + ... + wₙxₙ) = 1/(1 + e^(-z))",
+    formulaExplanation: "Xác suất thuộc lớp DDoS = sigmoid của tổ hợp tuyến tính các đặc trưng. wᵢ là trọng số (weight) của đặc trưng xᵢ. z = Σwᵢxᵢ. Sigmoid σ(z) nén giá trị z vào khoảng (0,1).",
+    steps: [
+      "1. Khởi tạo weights ngẫu nhiên nhỏ",
+      "2. Với mỗi mẫu: z = w·x, ŷ = sigmoid(z)",
+      "3. Tính loss: L = -(y·log(ŷ) + (1-y)·log(1-ŷ))",
+      "4. Cập nhật weights: w = w - α·∇L (gradient descent)",
+      "5. Lặp lại đến khi hội tụ hoặc đạt max iterations"
+    ],
+    strengths: ["Đưa ra xác suất dự đoán trực tiếp", "Nhanh và hiệu quả bộ nhớ", "Dễ giải thích qua trọng số - weight lớn = đặc trưng quan trọng"],
+    weaknesses: ["Chỉ tìm được ranh giới tuyến tính", "Không bắt được quan hệ phi tuyến phức tạp", "Cần chuẩn hóa dữ liệu để hội tụ nhanh"],
     bestFor: "Phân loại khi traffic DDoS có đặc trưng khác biệt rõ ràng với traffic bình thường",
+    parameters: ["Learning rate: 0.1", "Max iterations: 200", "Regularization: L2"]
   },
   lucid_cnn: {
-    howItWorks: "LUCID Neural Network lấy cảm hứng từ nghiên cứu LUCID (IEEE TNSM 2020) sử dụng mạng neural với convolution filters. Thuật toán: 1) Reshape features thành ma trận 2D (time-window simulation), 2) Áp dụng 32 convolution filters với kernel 3×N để trích xuất patterns, 3) Max pooling lấy đặc trưng quan trọng nhất từ mỗi filter, 4) Fully-connected layer với sigmoid để phân loại. Backpropagation cập nhật cả kernel weights và FC weights. Công thức: output = sigmoid(W × maxpool(ReLU(conv(X, K))) + b).",
-    strengths: ["Tự động học patterns từ dữ liệu", "Xử lý được nhiều đặc trưng đồng thời", "Nhẹ và nhanh cho môi trường web", "Có thể phát hiện patterns phức tạp"],
-    weaknesses: ["Đơn giản hơn CNN thực sự", "Cần dữ liệu có nhãn để huấn luyện", "Kết quả phụ thuộc random initialization"],
+    howItWorks: "LUCID Neural Network lấy cảm hứng từ nghiên cứu LUCID (IEEE TNSM 2020). Reshape features thành ma trận 2D, áp dụng convolution filters để trích xuất patterns, max pooling lấy đặc trưng quan trọng nhất, fully-connected layer để phân loại.",
+    formula: "output = σ(W · maxpool(ReLU(X ⊛ K)) + b)",
+    formulaExplanation: "X ⊛ K = convolution của input X với kernel K. ReLU(z) = max(0,z) là hàm kích hoạt. Maxpool lấy giá trị lớn nhất từ mỗi filter. W·pooled + b là lớp fully-connected. σ = sigmoid cho xác suất đầu ra.",
+    steps: [
+      "1. Reshape vector đặc trưng thành ma trận 2D (mô phỏng time-window)",
+      "2. Áp dụng 32 convolution filters (kernel 3×N) lên ma trận",
+      "3. ReLU activation: chỉ giữ giá trị dương",
+      "4. Global max pooling: lấy giá trị lớn nhất từ mỗi filter",
+      "5. Fully-connected layer: z = W·pooled + b",
+      "6. Sigmoid: output = 1/(1+e^(-z))",
+      "7. Backpropagation cập nhật cả kernel weights và FC weights"
+    ],
+    strengths: ["Tự động học patterns từ dữ liệu", "Xử lý được nhiều đặc trưng đồng thời", "Nhẹ và nhanh cho môi trường web"],
+    weaknesses: ["Đơn giản hơn CNN thực sự (vertical convolution only)", "Cần dữ liệu có nhãn để huấn luyện", "Kết quả phụ thuộc random initialization"],
     bestFor: "Phát hiện DDoS khi cần kết hợp nhiều đặc trưng và học patterns tự động",
+    parameters: ["Số filters: 32", "Kernel size: 3×N", "Learning rate: 0.01", "Epochs: 50"]
   },
 };

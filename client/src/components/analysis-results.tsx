@@ -1,4 +1,4 @@
-import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle, Info, Zap, BookOpen, CheckCircle2, XCircle, Lightbulb } from "lucide-react";
+import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle, Info, Zap, BookOpen, CheckCircle2, XCircle, Lightbulb, Calculator, ListOrdered, Settings } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -578,6 +578,46 @@ function AlgorithmExplanations({ results, getModelName }: AlgorithmExplanationsP
                   Cách hoạt động:
                 </h4>
                 <p className="text-sm text-muted-foreground">{details.howItWorks}</p>
+              </div>
+              
+              <div className="rounded-lg bg-primary/10 p-4 border border-primary/20">
+                <h4 className="font-semibold flex items-center gap-2 mb-2 text-primary">
+                  <Calculator className="h-4 w-4" />
+                  Công thức toán học:
+                </h4>
+                <code className="block text-sm bg-background p-2 rounded font-mono mb-2">
+                  {details.formula}
+                </code>
+                <p className="text-sm text-muted-foreground">{details.formulaExplanation}</p>
+              </div>
+              
+              <div>
+                <h4 className="font-semibold flex items-center gap-2 mb-2">
+                  <ListOrdered className="h-4 w-4 text-chart-1" />
+                  Các bước thực hiện:
+                </h4>
+                <ol className="text-sm space-y-1 list-none">
+                  {details.steps.map((step, i) => (
+                    <li key={i} className="flex items-start gap-2 text-muted-foreground">
+                      <span className="text-chart-1 font-medium min-w-[20px]">{i + 1}.</span>
+                      <span>{step.replace(/^\d+\.\s*/, '')}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+              
+              <div className="rounded-lg bg-accent/30 p-3">
+                <h4 className="font-semibold flex items-center gap-2 mb-2 text-sm">
+                  <Settings className="h-4 w-4 text-muted-foreground" />
+                  Tham số sử dụng:
+                </h4>
+                <div className="flex flex-wrap gap-2">
+                  {details.parameters.map((param, i) => (
+                    <span key={i} className="text-xs bg-background px-2 py-1 rounded border">
+                      {param}
+                    </span>
+                  ))}
+                </div>
               </div>
               
               <div className="grid md:grid-cols-2 gap-4">
