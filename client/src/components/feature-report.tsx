@@ -28,6 +28,9 @@ interface LabelStats {
     count: number;
     percentage: number;
     category: string;
+    severity?: 'low' | 'medium' | 'high' | 'critical';
+    isAttack?: boolean;
+    description?: string;
   };
 }
 
@@ -202,35 +205,60 @@ export function FeatureReport({ schemaDetection, featureReport, labelStats }: Fe
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2 max-h-48 overflow-y-auto" data-testid="container-label-stats">
+            <div className="space-y-2 max-h-64 overflow-y-auto" data-testid="container-label-stats">
               {Object.entries(labelStats)
                 .sort((a, b) => b[1].count - a[1].count)
-                .slice(0, 10)
-                .map(([label, stats], index) => (
-                  <div key={label} className="space-y-1" data-testid={`label-item-${index}`}>
-                    <div className="flex items-center justify-between text-sm">
-                      <div className="flex items-center gap-2">
-                        <Badge 
-                          variant={stats.category === 'normal' ? 'secondary' : 'destructive'}
-                          className="text-xs"
-                          data-testid={`badge-label-category-${index}`}
-                        >
-                          {stats.category === 'normal' ? 'Normal' : 'Attack'}
-                        </Badge>
-                        <span className="text-muted-foreground truncate max-w-32" title={label} data-testid={`text-label-name-${index}`}>
-                          {label.length > 20 ? label.slice(0, 20) + '...' : label}
+                .slice(0, 15)
+                .map(([label, stats], index) => {
+                  const isNormal = stats.category === 'normal';
+                  const isAttack = stats.isAttack ?? !isNormal;
+                  const severity = stats.severity || 'medium';
+                  
+                  const severityColors: Record<string, string> = {
+                    low: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+                    medium: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
+                    high: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
+                    critical: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+                  };
+                  
+                  return (
+                    <div key={label} className="space-y-1" data-testid={`label-item-${index}`}>
+                      <div className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge 
+                            variant={isNormal ? 'secondary' : 'destructive'}
+                            className="text-xs"
+                            data-testid={`badge-label-type-${index}`}
+                          >
+                            {isNormal ? 'Normal' : (isAttack ? 'Attack' : 'Anomaly')}
+                          </Badge>
+                          {!isNormal && (
+                            <span 
+                              className={`text-xs px-1.5 py-0.5 rounded ${severityColors[severity]}`}
+                              data-testid={`badge-severity-${index}`}
+                            >
+                              {severity}
+                            </span>
+                          )}
+                          <span 
+                            className="text-muted-foreground truncate max-w-24" 
+                            title={stats.description || label} 
+                            data-testid={`text-label-name-${index}`}
+                          >
+                            {label.length > 15 ? label.slice(0, 15) + '...' : label}
+                          </span>
+                        </div>
+                        <span className="text-xs whitespace-nowrap" data-testid={`text-label-count-${index}`}>
+                          {stats.count.toLocaleString()} ({stats.percentage.toFixed(1)}%)
                         </span>
                       </div>
-                      <span className="text-xs" data-testid={`text-label-count-${index}`}>
-                        {stats.count.toLocaleString()} ({stats.percentage.toFixed(1)}%)
-                      </span>
+                      <Progress value={stats.percentage} className="h-1" data-testid={`progress-label-${index}`} />
                     </div>
-                    <Progress value={stats.percentage} className="h-1" data-testid={`progress-label-${index}`} />
-                  </div>
-                ))}
-              {Object.keys(labelStats).length > 10 && (
+                  );
+                })}
+              {Object.keys(labelStats).length > 15 && (
                 <p className="text-xs text-muted-foreground text-center" data-testid="text-more-labels">
-                  +{Object.keys(labelStats).length - 10} labels khác
+                  +{Object.keys(labelStats).length - 15} labels khác
                 </p>
               )}
             </div>

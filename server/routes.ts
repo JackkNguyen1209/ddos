@@ -13,7 +13,14 @@ import {
   normalizeDataset, 
   getModelForSchema,
   getLabelStats,
-  type SchemaType
+  addCustomLabel,
+  removeCustomLabel,
+  getCustomLabels,
+  getAllLabelMappings,
+  setCustomLabels,
+  type SchemaType,
+  type LabelConfig,
+  type LabelCategory
 } from "./schema-detection";
 
 // Helper function to extract features for report
@@ -775,6 +782,135 @@ export async function registerRoutes(
       console.error("Clear learning error:", error);
       res.status(500).json({ error: "Failed to clear learning data" });
     }
+  });
+
+  // ============== CUSTOM LABEL MANAGEMENT ==============
+  
+  // Get all label mappings (built-in + custom)
+  app.get("/api/labels", (req, res) => {
+    try {
+      const labels = getAllLabelMappings();
+      const customLabels = getCustomLabels();
+      
+      // Group by category
+      const grouped: Record<string, { label: string; config: LabelConfig }[]> = {};
+      for (const [label, config] of Object.entries(labels)) {
+        const category = config.category;
+        if (!grouped[category]) {
+          grouped[category] = [];
+        }
+        grouped[category].push({ label, config });
+      }
+      
+      res.json({
+        total: Object.keys(labels).length,
+        customCount: Object.keys(customLabels).length,
+        builtInCount: Object.keys(labels).length - Object.keys(customLabels).length,
+        labels,
+        customLabels,
+        grouped,
+      });
+    } catch (error) {
+      console.error("Get labels error:", error);
+      res.status(500).json({ error: "Failed to get label mappings" });
+    }
+  });
+  
+  // Add custom label
+  app.post("/api/labels", (req, res) => {
+    try {
+      const { labelName, isAttack, category, severity, description } = req.body;
+      
+      if (!labelName) {
+        return res.status(400).json({ error: "labelName is required" });
+      }
+      
+      addCustomLabel(labelName, {
+        isAttack: Boolean(isAttack),
+        category: category as LabelCategory,
+        severity: severity as 'low' | 'medium' | 'high' | 'critical',
+        description,
+      });
+      
+      res.json({
+        success: true,
+        message: `Đã thêm label "${labelName}" ${isAttack ? 'là tấn công' : 'không phải tấn công'}`,
+        label: labelName,
+        config: getCustomLabels()[labelName.toLowerCase().trim().replace(/[\s\-\.]+/g, '_')],
+      });
+    } catch (error) {
+      console.error("Add label error:", error);
+      res.status(500).json({ error: "Failed to add custom label" });
+    }
+  });
+  
+  // Update/set multiple custom labels
+  app.put("/api/labels", (req, res) => {
+    try {
+      const { labels } = req.body;
+      
+      if (!labels || typeof labels !== 'object') {
+        return res.status(400).json({ error: "labels object is required" });
+      }
+      
+      setCustomLabels(labels as Record<string, LabelConfig>);
+      
+      res.json({
+        success: true,
+        message: `Đã cập nhật ${Object.keys(labels).length} labels`,
+        customLabels: getCustomLabels(),
+      });
+    } catch (error) {
+      console.error("Update labels error:", error);
+      res.status(500).json({ error: "Failed to update labels" });
+    }
+  });
+  
+  // Delete custom label
+  app.delete("/api/labels/:labelName", (req, res) => {
+    try {
+      const { labelName } = req.params;
+      
+      const removed = removeCustomLabel(labelName);
+      
+      if (removed) {
+        res.json({
+          success: true,
+          message: `Đã xóa label "${labelName}"`,
+        });
+      } else {
+        res.status(404).json({
+          error: `Label "${labelName}" không tồn tại hoặc là label hệ thống`,
+        });
+      }
+    } catch (error) {
+      console.error("Delete label error:", error);
+      res.status(500).json({ error: "Failed to delete label" });
+    }
+  });
+  
+  // Get label categories info
+  app.get("/api/labels/categories", (req, res) => {
+    const categories: Record<string, { description: string; isAttack: boolean; severity: string }> = {
+      normal: { description: 'Lưu lượng bình thường', isAttack: false, severity: 'low' },
+      ddos: { description: 'Tấn công DDoS chung', isAttack: true, severity: 'critical' },
+      ddos_volumetric: { description: 'DDoS lưu lượng lớn (UDP/ICMP flood)', isAttack: true, severity: 'critical' },
+      ddos_protocol: { description: 'DDoS khai thác giao thức (SYN flood)', isAttack: true, severity: 'critical' },
+      ddos_amplification: { description: 'DDoS khuếch đại (DNS/NTP)', isAttack: true, severity: 'critical' },
+      ddos_application: { description: 'DDoS lớp ứng dụng (HTTP flood)', isAttack: true, severity: 'high' },
+      reconnaissance: { description: 'Quét thăm dò (Port scan)', isAttack: true, severity: 'medium' },
+      bruteforce: { description: 'Tấn công dò mật khẩu', isAttack: true, severity: 'high' },
+      exploit: { description: 'Khai thác lỗ hổng', isAttack: true, severity: 'critical' },
+      malware: { description: 'Mã độc, botnet', isAttack: true, severity: 'critical' },
+      infiltration: { description: 'Xâm nhập hệ thống', isAttack: true, severity: 'critical' },
+      anomaly_traffic: { description: 'Bất thường lưu lượng (không rõ attack)', isAttack: false, severity: 'medium' },
+      anomaly_behavior: { description: 'Bất thường hành vi', isAttack: false, severity: 'medium' },
+      anomaly_protocol: { description: 'Bất thường giao thức', isAttack: false, severity: 'medium' },
+      anomaly_resource: { description: 'Bất thường tài nguyên', isAttack: false, severity: 'high' },
+      custom: { description: 'Label tùy chỉnh', isAttack: false, severity: 'medium' },
+    };
+    
+    res.json({ categories });
   });
 
   return httpServer;

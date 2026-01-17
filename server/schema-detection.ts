@@ -24,8 +24,38 @@ export interface FeatureReport {
 
 export interface LabelMapping {
   original: string;
-  normalized: number;
-  category: string;
+  normalized: number;          // 0 = normal, 1 = anomaly/attack
+  category: string;            // Detailed category
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  isAttack: boolean;           // true = attack, false = anomaly only
+  description: string;
+}
+
+// Label categories with severity and attack classification
+export type LabelCategory = 
+  | 'normal'           // Bình thường
+  | 'ddos'             // DDoS chung
+  | 'ddos_volumetric'  // DDoS lưu lượng lớn (UDP flood, ICMP flood)
+  | 'ddos_protocol'    // DDoS khai thác giao thức (SYN flood, TCP)
+  | 'ddos_amplification' // DDoS khuếch đại (DNS, NTP, SSDP)
+  | 'ddos_application' // DDoS lớp ứng dụng (HTTP flood, Slowloris)
+  | 'reconnaissance'   // Quét thăm dò (Port scan, Network scan)
+  | 'bruteforce'       // Tấn công brute force
+  | 'exploit'          // Khai thác lỗ hổng
+  | 'malware'          // Mã độc, botnet
+  | 'infiltration'     // Xâm nhập
+  | 'anomaly_traffic'  // Bất thường lưu lượng (không rõ attack)
+  | 'anomaly_behavior' // Bất thường hành vi
+  | 'anomaly_protocol' // Bất thường giao thức
+  | 'anomaly_resource' // Bất thường tài nguyên
+  | 'custom';          // Tùy chỉnh
+
+export interface LabelConfig {
+  value: number;
+  category: LabelCategory;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  isAttack: boolean;
+  description: string;
 }
 
 const COLUMN_ALIASES: Record<string, string[]> = {
@@ -134,43 +164,172 @@ const EVENT_LOG_FEATURES = [
   'packets',
 ];
 
-const LABEL_MAPPINGS: Record<string, { value: number; category: string }> = {
-  'benign': { value: 0, category: 'normal' },
-  'normal': { value: 0, category: 'normal' },
-  'legitimate': { value: 0, category: 'normal' },
-  'safe': { value: 0, category: 'normal' },
-  'ddos': { value: 1, category: 'ddos' },
-  'drdos': { value: 1, category: 'ddos' },
-  'drdos_dns': { value: 1, category: 'ddos_amplification' },
-  'drdos_ldap': { value: 1, category: 'ddos_amplification' },
-  'drdos_mssql': { value: 1, category: 'ddos_amplification' },
-  'drdos_netbios': { value: 1, category: 'ddos_amplification' },
-  'drdos_ntp': { value: 1, category: 'ddos_amplification' },
-  'drdos_snmp': { value: 1, category: 'ddos_amplification' },
-  'drdos_ssdp': { value: 1, category: 'ddos_amplification' },
-  'drdos_udp': { value: 1, category: 'ddos_volumetric' },
-  'drdos_udplag': { value: 1, category: 'ddos_volumetric' },
-  'syn': { value: 1, category: 'ddos_protocol' },
-  'syn_flood': { value: 1, category: 'ddos_protocol' },
-  'udp': { value: 1, category: 'ddos_volumetric' },
-  'udp_flood': { value: 1, category: 'ddos_volumetric' },
-  'tftp': { value: 1, category: 'ddos_amplification' },
-  'portmap': { value: 1, category: 'ddos_amplification' },
-  'portscan': { value: 1, category: 'reconnaissance' },
-  'netscan': { value: 1, category: 'reconnaissance' },
-  'bruteforce': { value: 1, category: 'bruteforce' },
-  'ssh_bruteforce': { value: 1, category: 'bruteforce' },
-  'ftp_bruteforce': { value: 1, category: 'bruteforce' },
-  'dos_slowloris': { value: 1, category: 'application_layer' },
-  'dos_slowhttptest': { value: 1, category: 'application_layer' },
-  'dos_hulk': { value: 1, category: 'application_layer' },
-  'dos_goldeneye': { value: 1, category: 'application_layer' },
-  'webddos': { value: 1, category: 'application_layer' },
-  'bot': { value: 1, category: 'botnet' },
-  'botnet': { value: 1, category: 'botnet' },
-  'heartbleed': { value: 1, category: 'exploit' },
-  'infiltration': { value: 1, category: 'infiltration' },
+// Comprehensive label mappings supporting multiple datasets
+const LABEL_MAPPINGS: Record<string, LabelConfig> = {
+  // === NORMAL / BENIGN ===
+  'benign': { value: 0, category: 'normal', severity: 'low', isAttack: false, description: 'Lưu lượng bình thường' },
+  'normal': { value: 0, category: 'normal', severity: 'low', isAttack: false, description: 'Lưu lượng bình thường' },
+  'legitimate': { value: 0, category: 'normal', severity: 'low', isAttack: false, description: 'Lưu lượng hợp lệ' },
+  'safe': { value: 0, category: 'normal', severity: 'low', isAttack: false, description: 'Lưu lượng an toàn' },
+  'clean': { value: 0, category: 'normal', severity: 'low', isAttack: false, description: 'Lưu lượng sạch' },
+  '0': { value: 0, category: 'normal', severity: 'low', isAttack: false, description: 'Label 0 - Bình thường' },
+  
+  // === DDoS GENERAL ===
+  'ddos': { value: 1, category: 'ddos', severity: 'critical', isAttack: true, description: 'Tấn công DDoS chung' },
+  'drdos': { value: 1, category: 'ddos', severity: 'critical', isAttack: true, description: 'Tấn công DRDoS' },
+  'dos': { value: 1, category: 'ddos', severity: 'high', isAttack: true, description: 'Tấn công DoS' },
+  'attack': { value: 1, category: 'ddos', severity: 'high', isAttack: true, description: 'Tấn công chung' },
+  '1': { value: 1, category: 'ddos', severity: 'high', isAttack: true, description: 'Label 1 - Tấn công' },
+  
+  // === DDoS AMPLIFICATION (Khuếch đại) ===
+  'drdos_dns': { value: 1, category: 'ddos_amplification', severity: 'critical', isAttack: true, description: 'DRDoS khuếch đại DNS' },
+  'drdos_ldap': { value: 1, category: 'ddos_amplification', severity: 'critical', isAttack: true, description: 'DRDoS khuếch đại LDAP' },
+  'drdos_mssql': { value: 1, category: 'ddos_amplification', severity: 'critical', isAttack: true, description: 'DRDoS khuếch đại MSSQL' },
+  'drdos_netbios': { value: 1, category: 'ddos_amplification', severity: 'critical', isAttack: true, description: 'DRDoS khuếch đại NetBIOS' },
+  'drdos_ntp': { value: 1, category: 'ddos_amplification', severity: 'critical', isAttack: true, description: 'DRDoS khuếch đại NTP' },
+  'drdos_snmp': { value: 1, category: 'ddos_amplification', severity: 'critical', isAttack: true, description: 'DRDoS khuếch đại SNMP' },
+  'drdos_ssdp': { value: 1, category: 'ddos_amplification', severity: 'critical', isAttack: true, description: 'DRDoS khuếch đại SSDP' },
+  'drdos_chargen': { value: 1, category: 'ddos_amplification', severity: 'critical', isAttack: true, description: 'DRDoS khuếch đại Chargen' },
+  'drdos_memcached': { value: 1, category: 'ddos_amplification', severity: 'critical', isAttack: true, description: 'DRDoS khuếch đại Memcached' },
+  'tftp': { value: 1, category: 'ddos_amplification', severity: 'high', isAttack: true, description: 'Tấn công TFTP amplification' },
+  'portmap': { value: 1, category: 'ddos_amplification', severity: 'high', isAttack: true, description: 'Tấn công Portmap amplification' },
+  
+  // === DDoS VOLUMETRIC (Lưu lượng lớn) ===
+  'drdos_udp': { value: 1, category: 'ddos_volumetric', severity: 'critical', isAttack: true, description: 'DRDoS UDP flood' },
+  'drdos_udplag': { value: 1, category: 'ddos_volumetric', severity: 'critical', isAttack: true, description: 'DRDoS UDP lag' },
+  'udp': { value: 1, category: 'ddos_volumetric', severity: 'high', isAttack: true, description: 'UDP flood' },
+  'udp_flood': { value: 1, category: 'ddos_volumetric', severity: 'critical', isAttack: true, description: 'UDP flood attack' },
+  'icmp_flood': { value: 1, category: 'ddos_volumetric', severity: 'high', isAttack: true, description: 'ICMP flood attack' },
+  'ping_flood': { value: 1, category: 'ddos_volumetric', severity: 'high', isAttack: true, description: 'Ping flood attack' },
+  'smurf': { value: 1, category: 'ddos_volumetric', severity: 'high', isAttack: true, description: 'Smurf attack' },
+  
+  // === DDoS PROTOCOL (Khai thác giao thức) ===
+  'syn': { value: 1, category: 'ddos_protocol', severity: 'critical', isAttack: true, description: 'SYN attack' },
+  'syn_flood': { value: 1, category: 'ddos_protocol', severity: 'critical', isAttack: true, description: 'SYN flood attack' },
+  'tcp_flood': { value: 1, category: 'ddos_protocol', severity: 'high', isAttack: true, description: 'TCP flood attack' },
+  'ack_flood': { value: 1, category: 'ddos_protocol', severity: 'high', isAttack: true, description: 'ACK flood attack' },
+  'rst_flood': { value: 1, category: 'ddos_protocol', severity: 'high', isAttack: true, description: 'RST flood attack' },
+  'fin_flood': { value: 1, category: 'ddos_protocol', severity: 'high', isAttack: true, description: 'FIN flood attack' },
+  'land': { value: 1, category: 'ddos_protocol', severity: 'medium', isAttack: true, description: 'LAND attack' },
+  'teardrop': { value: 1, category: 'ddos_protocol', severity: 'medium', isAttack: true, description: 'Teardrop attack' },
+  
+  // === DDoS APPLICATION LAYER (Lớp ứng dụng) ===
+  'dos_slowloris': { value: 1, category: 'ddos_application', severity: 'high', isAttack: true, description: 'Slowloris attack' },
+  'dos_slowhttptest': { value: 1, category: 'ddos_application', severity: 'high', isAttack: true, description: 'Slow HTTP test attack' },
+  'dos_hulk': { value: 1, category: 'ddos_application', severity: 'high', isAttack: true, description: 'HULK attack' },
+  'dos_goldeneye': { value: 1, category: 'ddos_application', severity: 'high', isAttack: true, description: 'GoldenEye attack' },
+  'webddos': { value: 1, category: 'ddos_application', severity: 'high', isAttack: true, description: 'Web DDoS attack' },
+  'http_flood': { value: 1, category: 'ddos_application', severity: 'high', isAttack: true, description: 'HTTP flood attack' },
+  'rudy': { value: 1, category: 'ddos_application', severity: 'high', isAttack: true, description: 'RUDY attack' },
+  'apache_killer': { value: 1, category: 'ddos_application', severity: 'critical', isAttack: true, description: 'Apache Killer attack' },
+  
+  // === RECONNAISSANCE (Quét thăm dò) ===
+  'portscan': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'Port scanning' },
+  'netscan': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'Network scanning' },
+  'reconnaissance': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'Quét thăm dò chung' },
+  'probe': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'Probing attack' },
+  'nmap': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'Nmap scanning' },
+  'satan': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'SATAN scan' },
+  'ipsweep': { value: 1, category: 'reconnaissance', severity: 'low', isAttack: true, description: 'IP sweep scan' },
+  'mscan': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'Mscan attack' },
+  'saint': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'Saint scan' },
+  
+  // === BRUTEFORCE (Tấn công dò mật khẩu) ===
+  'bruteforce': { value: 1, category: 'bruteforce', severity: 'high', isAttack: true, description: 'Brute force attack' },
+  'ssh_bruteforce': { value: 1, category: 'bruteforce', severity: 'high', isAttack: true, description: 'SSH brute force' },
+  'ftp_bruteforce': { value: 1, category: 'bruteforce', severity: 'high', isAttack: true, description: 'FTP brute force' },
+  'guess_passwd': { value: 1, category: 'bruteforce', severity: 'high', isAttack: true, description: 'Password guessing' },
+  'snmpguess': { value: 1, category: 'bruteforce', severity: 'medium', isAttack: true, description: 'SNMP guess attack' },
+  'httptunnel': { value: 1, category: 'bruteforce', severity: 'medium', isAttack: true, description: 'HTTP tunnel' },
+  
+  // === EXPLOIT (Khai thác lỗ hổng) ===
+  'heartbleed': { value: 1, category: 'exploit', severity: 'critical', isAttack: true, description: 'Heartbleed exploit' },
+  'shellshock': { value: 1, category: 'exploit', severity: 'critical', isAttack: true, description: 'Shellshock exploit' },
+  'sql_injection': { value: 1, category: 'exploit', severity: 'critical', isAttack: true, description: 'SQL injection' },
+  'xss': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'Cross-site scripting' },
+  'buffer_overflow': { value: 1, category: 'exploit', severity: 'critical', isAttack: true, description: 'Buffer overflow' },
+  'rootkit': { value: 1, category: 'exploit', severity: 'critical', isAttack: true, description: 'Rootkit attack' },
+  'loadmodule': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'Load module attack' },
+  'perl': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'Perl attack' },
+  'phf': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'PHF attack' },
+  'r2l': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'Remote to Local attack' },
+  'u2r': { value: 1, category: 'exploit', severity: 'critical', isAttack: true, description: 'User to Root attack' },
+  
+  // === MALWARE / BOTNET ===
+  'bot': { value: 1, category: 'malware', severity: 'critical', isAttack: true, description: 'Bot/Botnet traffic' },
+  'botnet': { value: 1, category: 'malware', severity: 'critical', isAttack: true, description: 'Botnet attack' },
+  'worm': { value: 1, category: 'malware', severity: 'critical', isAttack: true, description: 'Worm infection' },
+  'trojan': { value: 1, category: 'malware', severity: 'critical', isAttack: true, description: 'Trojan activity' },
+  'backdoor': { value: 1, category: 'malware', severity: 'critical', isAttack: true, description: 'Backdoor activity' },
+  'virus': { value: 1, category: 'malware', severity: 'critical', isAttack: true, description: 'Virus activity' },
+  'ransomware': { value: 1, category: 'malware', severity: 'critical', isAttack: true, description: 'Ransomware attack' },
+  'spyware': { value: 1, category: 'malware', severity: 'high', isAttack: true, description: 'Spyware activity' },
+  
+  // === INFILTRATION (Xâm nhập) ===
+  'infiltration': { value: 1, category: 'infiltration', severity: 'critical', isAttack: true, description: 'Xâm nhập hệ thống' },
+  'apt': { value: 1, category: 'infiltration', severity: 'critical', isAttack: true, description: 'Advanced Persistent Threat' },
+  'exfiltration': { value: 1, category: 'infiltration', severity: 'critical', isAttack: true, description: 'Data exfiltration' },
+  
+  // === ANOMALY - TRAFFIC (Bất thường lưu lượng - KHÔNG RÕ LÀ TẤN CÔNG) ===
+  'anomaly': { value: 1, category: 'anomaly_traffic', severity: 'medium', isAttack: false, description: 'Bất thường lưu lượng chung' },
+  'unusual_traffic': { value: 1, category: 'anomaly_traffic', severity: 'medium', isAttack: false, description: 'Lưu lượng bất thường' },
+  'high_bandwidth': { value: 1, category: 'anomaly_traffic', severity: 'low', isAttack: false, description: 'Băng thông cao bất thường' },
+  'spike': { value: 1, category: 'anomaly_traffic', severity: 'medium', isAttack: false, description: 'Đột biến lưu lượng' },
+  'burst': { value: 1, category: 'anomaly_traffic', severity: 'low', isAttack: false, description: 'Burst traffic' },
+  'congestion': { value: 1, category: 'anomaly_traffic', severity: 'low', isAttack: false, description: 'Tắc nghẽn mạng' },
+  
+  // === ANOMALY - BEHAVIOR (Bất thường hành vi) ===
+  'suspicious': { value: 1, category: 'anomaly_behavior', severity: 'medium', isAttack: false, description: 'Hành vi đáng ngờ' },
+  'unusual_connection': { value: 1, category: 'anomaly_behavior', severity: 'medium', isAttack: false, description: 'Kết nối bất thường' },
+  'abnormal_session': { value: 1, category: 'anomaly_behavior', severity: 'medium', isAttack: false, description: 'Phiên bất thường' },
+  'policy_violation': { value: 1, category: 'anomaly_behavior', severity: 'low', isAttack: false, description: 'Vi phạm chính sách' },
+  'unusual_login': { value: 1, category: 'anomaly_behavior', severity: 'medium', isAttack: false, description: 'Đăng nhập bất thường' },
+  'failed_login': { value: 1, category: 'anomaly_behavior', severity: 'low', isAttack: false, description: 'Đăng nhập thất bại' },
+  
+  // === ANOMALY - PROTOCOL (Bất thường giao thức) ===
+  'malformed_packet': { value: 1, category: 'anomaly_protocol', severity: 'medium', isAttack: false, description: 'Gói tin sai định dạng' },
+  'protocol_violation': { value: 1, category: 'anomaly_protocol', severity: 'medium', isAttack: false, description: 'Vi phạm giao thức' },
+  'fragmentation': { value: 1, category: 'anomaly_protocol', severity: 'low', isAttack: false, description: 'Phân mảnh bất thường' },
+  'invalid_header': { value: 1, category: 'anomaly_protocol', severity: 'medium', isAttack: false, description: 'Header không hợp lệ' },
+  
+  // === ANOMALY - RESOURCE (Bất thường tài nguyên) ===
+  'high_cpu': { value: 1, category: 'anomaly_resource', severity: 'medium', isAttack: false, description: 'CPU cao bất thường' },
+  'high_memory': { value: 1, category: 'anomaly_resource', severity: 'medium', isAttack: false, description: 'Memory cao bất thường' },
+  'disk_full': { value: 1, category: 'anomaly_resource', severity: 'high', isAttack: false, description: 'Ổ đĩa đầy' },
+  'resource_exhaustion': { value: 1, category: 'anomaly_resource', severity: 'high', isAttack: false, description: 'Cạn kiệt tài nguyên' },
+  
+  // === UNSW-NB15 Dataset Labels ===
+  'analysis': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'Analysis attack (UNSW-NB15)' },
+  'fuzzers': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'Fuzzing attack (UNSW-NB15)' },
+  'generic': { value: 1, category: 'ddos', severity: 'high', isAttack: true, description: 'Generic attack (UNSW-NB15)' },
+  'exploits': { value: 1, category: 'exploit', severity: 'critical', isAttack: true, description: 'Exploits (UNSW-NB15)' },
+  'shellcode': { value: 1, category: 'exploit', severity: 'critical', isAttack: true, description: 'Shellcode attack (UNSW-NB15)' },
+  
+  // === NSL-KDD Dataset Labels ===
+  'neptune': { value: 1, category: 'ddos_protocol', severity: 'high', isAttack: true, description: 'Neptune attack (NSL-KDD)' },
+  'pod': { value: 1, category: 'ddos_volumetric', severity: 'high', isAttack: true, description: 'Ping of Death (NSL-KDD)' },
+  'apache2': { value: 1, category: 'ddos_application', severity: 'high', isAttack: true, description: 'Apache2 attack (NSL-KDD)' },
+  'back': { value: 1, category: 'ddos_application', severity: 'high', isAttack: true, description: 'Back attack (NSL-KDD)' },
+  'mailbomb': { value: 1, category: 'ddos_volumetric', severity: 'high', isAttack: true, description: 'Mailbomb attack (NSL-KDD)' },
+  'processtable': { value: 1, category: 'ddos', severity: 'high', isAttack: true, description: 'Process table attack (NSL-KDD)' },
+  'udpstorm': { value: 1, category: 'ddos_volumetric', severity: 'critical', isAttack: true, description: 'UDP Storm (NSL-KDD)' },
+  'warezmaster': { value: 1, category: 'infiltration', severity: 'high', isAttack: true, description: 'Warezmaster (NSL-KDD)' },
+  'snmpgetattack': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'SNMP Get attack (NSL-KDD)' },
+  'multihop': { value: 1, category: 'infiltration', severity: 'high', isAttack: true, description: 'Multihop attack (NSL-KDD)' },
+  'ftp_write': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'FTP Write attack (NSL-KDD)' },
+  'imap': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'IMAP attack (NSL-KDD)' },
+  'spy': { value: 1, category: 'infiltration', severity: 'high', isAttack: true, description: 'Spy attack (NSL-KDD)' },
+  'xlock': { value: 1, category: 'exploit', severity: 'medium', isAttack: true, description: 'Xlock attack (NSL-KDD)' },
+  'xsnoop': { value: 1, category: 'reconnaissance', severity: 'medium', isAttack: true, description: 'Xsnoop attack (NSL-KDD)' },
+  'sendmail': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'Sendmail attack (NSL-KDD)' },
+  'named': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'Named attack (NSL-KDD)' },
+  'xterm': { value: 1, category: 'exploit', severity: 'high', isAttack: true, description: 'Xterm attack (NSL-KDD)' },
+  'ps': { value: 1, category: 'reconnaissance', severity: 'low', isAttack: true, description: 'PS attack (NSL-KDD)' },
+  'sqlattack': { value: 1, category: 'exploit', severity: 'critical', isAttack: true, description: 'SQL Attack (NSL-KDD)' },
 };
+
+// Custom label definitions storage (user-defined)
+let customLabelMappings: Record<string, LabelConfig> = {};
 
 export function normalizeColumnName(name: string): string {
   return name
@@ -253,38 +412,123 @@ export function mapLabel(label: string): LabelMapping {
     .replace(/[\s\-\.]+/g, '_')
     .replace(/[^a-z0-9_]/g, '');
   
-  if (LABEL_MAPPINGS[normalized]) {
+  // Check custom mappings first (user-defined)
+  if (customLabelMappings[normalized]) {
+    const mapping = customLabelMappings[normalized];
     return {
       original: label,
-      normalized: LABEL_MAPPINGS[normalized].value,
-      category: LABEL_MAPPINGS[normalized].category,
+      normalized: mapping.value,
+      category: mapping.category,
+      severity: mapping.severity,
+      isAttack: mapping.isAttack,
+      description: mapping.description,
     };
   }
   
+  // Check built-in mappings
+  if (LABEL_MAPPINGS[normalized]) {
+    const mapping = LABEL_MAPPINGS[normalized];
+    return {
+      original: label,
+      normalized: mapping.value,
+      category: mapping.category,
+      severity: mapping.severity,
+      isAttack: mapping.isAttack,
+      description: mapping.description,
+    };
+  }
+  
+  // Partial match in built-in mappings
   for (const [key, mapping] of Object.entries(LABEL_MAPPINGS)) {
     if (normalized.includes(key) || key.includes(normalized)) {
       return {
         original: label,
         normalized: mapping.value,
         category: mapping.category,
+        severity: mapping.severity,
+        isAttack: mapping.isAttack,
+        description: mapping.description,
       };
     }
   }
   
+  // Heuristic detection for unknown attack patterns
   if (normalized.startsWith('drdos') || normalized.startsWith('ddos') || 
-      normalized.includes('attack') || normalized.includes('malicious')) {
+      normalized.includes('attack') || normalized.includes('malicious') ||
+      normalized.includes('flood') || normalized.includes('exploit')) {
     return {
       original: label,
       normalized: 1,
-      category: 'unknown_attack',
+      category: 'custom',
+      severity: 'medium',
+      isAttack: true,
+      description: `Phát hiện tấn công: ${label}`,
     };
   }
   
+  // Heuristic detection for anomaly patterns (not confirmed attack)
+  if (normalized.includes('anomaly') || normalized.includes('unusual') ||
+      normalized.includes('suspicious') || normalized.includes('abnormal')) {
+    return {
+      original: label,
+      normalized: 1,
+      category: 'anomaly_behavior',
+      severity: 'medium',
+      isAttack: false,
+      description: `Bất thường phát hiện: ${label}`,
+    };
+  }
+  
+  // Default: treat as unknown anomaly (not confirmed attack)
   return {
     original: label,
     normalized: 1,
-    category: 'unknown',
+    category: 'custom',
+    severity: 'low',
+    isAttack: false,
+    description: `Label không xác định: ${label}`,
   };
+}
+
+// Functions for custom label management
+export function addCustomLabel(
+  labelName: string, 
+  config: { 
+    isAttack: boolean; 
+    category?: LabelCategory; 
+    severity?: 'low' | 'medium' | 'high' | 'critical';
+    description?: string;
+  }
+): void {
+  const normalized = labelName.toLowerCase().trim().replace(/[\s\-\.]+/g, '_');
+  customLabelMappings[normalized] = {
+    value: config.isAttack ? 1 : 0,
+    category: config.category || (config.isAttack ? 'custom' : 'normal'),
+    severity: config.severity || 'medium',
+    isAttack: config.isAttack,
+    description: config.description || `Custom label: ${labelName}`,
+  };
+}
+
+export function removeCustomLabel(labelName: string): boolean {
+  const normalized = labelName.toLowerCase().trim().replace(/[\s\-\.]+/g, '_');
+  if (customLabelMappings[normalized]) {
+    delete customLabelMappings[normalized];
+    return true;
+  }
+  return false;
+}
+
+export function getCustomLabels(): Record<string, LabelConfig> {
+  return { ...customLabelMappings };
+}
+
+export function getAllLabelMappings(): Record<string, LabelConfig> {
+  return { ...LABEL_MAPPINGS, ...customLabelMappings };
+}
+
+export function setCustomLabels(labels: Record<string, LabelConfig>): void {
+  customLabelMappings = { ...labels };
 }
 
 export function analyzeFeatureUsage(

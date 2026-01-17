@@ -134,3 +134,25 @@ The ML pipeline follows strict best practices to prevent data leakage:
   5. `model.train()` → train on scaled train data
   6. `model.predict()` → predict on scaled test data
 - **No Information Leak**: Test set statistics never influence scaling parameters
+
+## Expanded Label System
+
+The app supports comprehensive label detection across multiple dataset formats:
+- **130+ built-in labels** covering: CICFlowMeter, UNSW-NB15, NSL-KDD, and custom logs
+- **Attack vs Anomaly distinction**: isAttack=true for confirmed attacks, false for anomalies
+- **Severity levels**: low, medium, high, critical
+- **16 categories**: normal, ddos, ddos_volumetric, ddos_protocol, ddos_amplification, ddos_application, reconnaissance, bruteforce, exploit, malware, infiltration, anomaly_traffic, anomaly_behavior, anomaly_protocol, anomaly_resource, custom
+
+### Custom Label API
+- `GET /api/labels` - Get all label mappings (built-in + custom)
+- `POST /api/labels` - Add custom label with isAttack, category, severity, description
+- `PUT /api/labels` - Bulk update custom labels
+- `DELETE /api/labels/:name` - Remove custom label
+- `GET /api/labels/categories` - Get category descriptions
+
+### Label Detection Flow
+1. Check custom mappings first (user-defined)
+2. Check built-in mappings (exact match)
+3. Partial match in built-in mappings
+4. Heuristic detection (flood, exploit, anomaly patterns)
+5. Default: unknown anomaly (not confirmed attack)
