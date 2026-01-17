@@ -144,7 +144,7 @@ class DecisionTree {
     const parentGini = this.gini(labels);
 
     for (let f = 0; f < features[0].length; f++) {
-      const values = [...new Set(features.map((row) => row[f]))].sort((a, b) => a - b);
+      const values = Array.from(new Set(features.map((row) => row[f]))).sort((a, b) => a - b);
       for (let i = 0; i < values.length - 1; i++) {
         const threshold = (values[i] + values[i + 1]) / 2;
         const leftIdx = features.map((row, idx) => (row[f] <= threshold ? idx : -1)).filter((i) => i >= 0);
@@ -180,7 +180,7 @@ class DecisionTree {
       return { leaf: true, prediction: ones >= labels.length / 2 ? 1 : 0 };
     }
 
-    const uniqueLabels = [...new Set(labels)];
+    const uniqueLabels = Array.from(new Set(labels));
     if (uniqueLabels.length === 1) {
       return { leaf: true, prediction: uniqueLabels[0] };
     }
@@ -315,7 +315,7 @@ class NaiveBayes {
   private featureVars: Record<number, number[]> = {};
 
   train(features: number[][], labels: number[]): void {
-    const classes = [...new Set(labels)];
+    const classes = Array.from(new Set(labels));
 
     for (const c of classes) {
       const classFeatures = features.filter((_, i) => labels[i] === c);
