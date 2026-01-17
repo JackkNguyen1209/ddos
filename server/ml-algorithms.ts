@@ -6,6 +6,234 @@ interface TrainingData {
   labels: number[];
 }
 
+// ============== ANALYSIS CACHE ==============
+interface CacheEntry {
+  result: AnalysisResult;
+  timestamp: number;
+  dataHash: string;
+}
+
+const analysisCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+function computeDataHash(data: DataRow[], modelType: string): string {
+  const sample = data.slice(0, 10).map(r => JSON.stringify(r)).join('');
+  return `${modelType}-${data.length}-${sample.length}-${sample.slice(0, 100)}`;
+}
+
+export function getCachedResult(data: DataRow[], modelType: string): AnalysisResult | null {
+  const hash = computeDataHash(data, modelType);
+  const entry = analysisCache.get(hash);
+  if (entry && Date.now() - entry.timestamp < CACHE_TTL_MS) {
+    return entry.result;
+  }
+  if (entry) {
+    analysisCache.delete(hash);
+  }
+  return null;
+}
+
+export function setCachedResult(data: DataRow[], modelType: string, result: AnalysisResult): void {
+  const hash = computeDataHash(data, modelType);
+  analysisCache.set(hash, {
+    result,
+    timestamp: Date.now(),
+    dataHash: hash,
+  });
+  // Clean old entries if cache gets too large
+  if (analysisCache.size > 100) {
+    const oldestKey = analysisCache.keys().next().value;
+    if (oldestKey) analysisCache.delete(oldestKey);
+  }
+}
+
+export function clearCache(): void {
+  analysisCache.clear();
+}
+
+export function getCacheStats(): { size: number; entries: string[] } {
+  return {
+    size: analysisCache.size,
+    entries: Array.from(analysisCache.keys()),
+  };
+}
+
+// ============== CONFUSION MATRIX ==============
+export interface ConfusionMatrix {
+  truePositives: number;
+  trueNegatives: number;
+  falsePositives: number;
+  falseNegatives: number;
+  matrix: number[][];
+  labels: string[];
+}
+
+export function calculateConfusionMatrix(
+  predictions: number[],
+  actual: number[],
+  labelNames: string[] = ['Normal', 'Attack']
+): ConfusionMatrix {
+  let tp = 0, tn = 0, fp = 0, fn = 0;
+  
+  for (let i = 0; i < predictions.length; i++) {
+    if (predictions[i] === 1 && actual[i] === 1) tp++;
+    else if (predictions[i] === 0 && actual[i] === 0) tn++;
+    else if (predictions[i] === 1 && actual[i] === 0) fp++;
+    else if (predictions[i] === 0 && actual[i] === 1) fn++;
+  }
+
+  return {
+    truePositives: tp,
+    trueNegatives: tn,
+    falsePositives: fp,
+    falseNegatives: fn,
+    matrix: [[tn, fp], [fn, tp]],
+    labels: labelNames,
+  };
+}
+
+// ============== FEATURE IMPORTANCE ==============
+export function calculateFeatureImportance(
+  features: number[][],
+  labels: number[],
+  featureNames: string[]
+): FeatureImportance[] {
+  const importances: FeatureImportance[] = [];
+  
+  if (features.length === 0 || features[0].length === 0) return importances;
+  
+  const numFeatures = features[0].length;
+  
+  for (let i = 0; i < numFeatures; i++) {
+    const featureValues = features.map(f => f[i]);
+    const attackValues = featureValues.filter((_, idx) => labels[idx] === 1);
+    const normalValues = featureValues.filter((_, idx) => labels[idx] === 0);
+    
+    const attackMean = attackValues.length > 0 ? attackValues.reduce((a, b) => a + b, 0) / attackValues.length : 0;
+    const normalMean = normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : 0;
+    
+    const attackStd = Math.sqrt(attackValues.reduce((sum, v) => sum + Math.pow(v - attackMean, 2), 0) / (attackValues.length || 1));
+    const normalStd = Math.sqrt(normalValues.reduce((sum, v) => sum + Math.pow(v - normalMean, 2), 0) / (normalValues.length || 1));
+    
+    // Calculate discrimination power using difference of means normalized by pooled std
+    const pooledStd = Math.sqrt((attackStd * attackStd + normalStd * normalStd) / 2) || 1;
+    const discriminationPower = Math.abs(attackMean - normalMean) / pooledStd;
+    
+    // Calculate correlation with label
+    const allMean = featureValues.reduce((a, b) => a + b, 0) / featureValues.length;
+    const labelMean = labels.reduce((a, b) => a + b, 0) / labels.length;
+    
+    let numerator = 0, denomFeature = 0, denomLabel = 0;
+    for (let j = 0; j < featureValues.length; j++) {
+      const fDiff = featureValues[j] - allMean;
+      const lDiff = labels[j] - labelMean;
+      numerator += fDiff * lDiff;
+      denomFeature += fDiff * fDiff;
+      denomLabel += lDiff * lDiff;
+    }
+    
+    const correlation = Math.abs(numerator / (Math.sqrt(denomFeature * denomLabel) || 1));
+    
+    // Combined importance score
+    const importance = (discriminationPower * 0.6 + correlation * 0.4);
+    
+    importances.push({
+      feature: featureNames[i] || `Feature ${i}`,
+      importance: Math.min(importance, 1), // Cap at 1
+      description: getFeatureDescription(featureNames[i] || ''),
+    });
+  }
+  
+  // Normalize to sum to 1
+  const total = importances.reduce((sum, f) => sum + f.importance, 0) || 1;
+  importances.forEach(f => f.importance = f.importance / total);
+  
+  return importances.sort((a, b) => b.importance - a.importance);
+}
+
+function getFeatureDescription(featureName: string): string {
+  const descriptions: Record<string, string> = {
+    'flow_duration': 'Thời gian kéo dài của flow',
+    'total_fwd_packets': 'Tổng số gói tin forward',
+    'total_bwd_packets': 'Tổng số gói tin backward',
+    'flow_bytes_s': 'Số bytes truyền mỗi giây',
+    'flow_packets_s': 'Số gói tin truyền mỗi giây',
+    'fwd_pkt_len_mean': 'Độ dài trung bình gói tin forward',
+    'bwd_pkt_len_mean': 'Độ dài trung bình gói tin backward',
+    'flow_iat_mean': 'Thời gian trung bình giữa các gói tin',
+    'syn_flag_cnt': 'Số lượng cờ SYN',
+    'rst_flag_cnt': 'Số lượng cờ RST',
+    'psh_flag_cnt': 'Số lượng cờ PSH',
+    'ack_flag_cnt': 'Số lượng cờ ACK',
+  };
+  
+  const lowerName = featureName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  return descriptions[lowerName] || `Đặc trưng: ${featureName}`;
+}
+
+// ============== RANDOM SEARCH (faster than Grid Search) ==============
+export interface RandomSearchResult {
+  bestParams: Record<string, any>;
+  bestScore: number;
+  allResults: Array<{ params: Record<string, any>; score: number }>;
+  searchTime: number;
+  totalSampled: number;
+}
+
+export function randomSearch(
+  features: number[][],
+  labels: number[],
+  modelType: MLModelType,
+  numSamples: number = 10,
+  kFolds: number = 3
+): RandomSearchResult {
+  const startTime = Date.now();
+  const configs = MODEL_HYPERPARAMS[modelType] || [];
+  
+  if (configs.length === 0) {
+    return {
+      bestParams: {},
+      bestScore: 0,
+      allResults: [],
+      searchTime: Date.now() - startTime,
+      totalSampled: 0,
+    };
+  }
+  
+  const allResults: Array<{ params: Record<string, any>; score: number }> = [];
+  let bestParams: Record<string, any> = {};
+  let bestScore = -1;
+  
+  for (let i = 0; i < numSamples; i++) {
+    // Randomly sample one value from each hyperparameter
+    const params: Record<string, any> = {};
+    for (const config of configs) {
+      const randomIdx = Math.floor(Math.random() * config.values.length);
+      params[config.name] = config.values[randomIdx];
+    }
+    
+    const cvResult = kFoldCrossValidation(features, labels, modelType, kFolds, params);
+    const score = cvResult.meanF1;
+    
+    allResults.push({ params, score });
+    
+    if (score > bestScore) {
+      bestScore = score;
+      bestParams = params;
+    }
+  }
+  
+  allResults.sort((a, b) => b.score - a.score);
+  
+  return {
+    bestParams,
+    bestScore,
+    allResults,
+    searchTime: Date.now() - startTime,
+    totalSampled: numSamples,
+  };
+}
+
 function extractFeatures(data: DataRow[], featureColumns: string[]): TrainingData {
   const features: number[][] = [];
   const labels: number[] = [];
@@ -390,6 +618,163 @@ class RandomForestWithDepth {
       return ones > predictions.length / 2 ? 1 : 0;
     });
   }
+}
+
+// ============== ENSEMBLE VOTING CLASSIFIER ==============
+export interface EnsembleResult {
+  predictions: number[];
+  modelVotes: { [modelType: string]: number[] };
+  confidence: number[];
+  ensembleMethod: 'hard_voting' | 'soft_voting';
+}
+
+export class VotingClassifier {
+  private models: Map<string, any> = new Map();
+  private modelTypes: MLModelType[] = [];
+  
+  constructor(modelTypes: MLModelType[] = ['decision_tree', 'random_forest', 'knn']) {
+    this.modelTypes = modelTypes;
+  }
+
+  train(features: number[][], labels: number[]): void {
+    this.models.clear();
+    
+    for (const modelType of this.modelTypes) {
+      const model = createModelWithHyperparams(modelType, {});
+      model.train(features, labels);
+      this.models.set(modelType, model);
+    }
+  }
+
+  predictWithVoting(features: number[][], method: 'hard_voting' | 'soft_voting' = 'hard_voting'): EnsembleResult {
+    const modelVotes: { [modelType: string]: number[] } = {};
+    
+    // Collect predictions from all models
+    this.models.forEach((model, modelType) => {
+      const predictions = model.predict(features);
+      modelVotes[modelType] = predictions;
+    });
+    
+    // Hard voting: majority vote
+    const predictions: number[] = [];
+    const confidence: number[] = [];
+    
+    for (let i = 0; i < features.length; i++) {
+      let votes1 = 0;
+      let votes0 = 0;
+      
+      for (const modelType of this.modelTypes) {
+        if (modelVotes[modelType][i] === 1) {
+          votes1++;
+        } else {
+          votes0++;
+        }
+      }
+      
+      const totalVotes = votes1 + votes0;
+      const prediction = votes1 > votes0 ? 1 : 0;
+      const conf = Math.max(votes1, votes0) / totalVotes;
+      
+      predictions.push(prediction);
+      confidence.push(conf);
+    }
+    
+    return {
+      predictions,
+      modelVotes,
+      confidence,
+      ensembleMethod: method,
+    };
+  }
+
+  predict(features: number[][]): number[] {
+    return this.predictWithVoting(features).predictions;
+  }
+}
+
+// Shuffle data while keeping features and labels aligned
+function shuffleData(features: number[][], labels: number[]): { features: number[][]; labels: number[] } {
+  const indices = features.map((_, i) => i);
+  // Fisher-Yates shuffle
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  return {
+    features: indices.map(i => features[i]),
+    labels: indices.map(i => labels[i]),
+  };
+}
+
+export function runEnsembleAnalysis(
+  features: number[][],
+  labels: number[],
+  modelTypes: MLModelType[] = ['decision_tree', 'random_forest', 'knn', 'naive_bayes', 'logistic_regression']
+): {
+  ensembleResult: EnsembleResult;
+  individualResults: { modelType: string; accuracy: number; f1Score: number }[];
+  ensembleMetrics: { accuracy: number; precision: number; recall: number; f1Score: number };
+} {
+  const classifier = new VotingClassifier(modelTypes);
+  
+  // Shuffle data to avoid ordering bias before split
+  const shuffled = shuffleData(features, labels);
+  
+  // Split data 80/20 for train/test
+  const splitIdx = Math.floor(shuffled.features.length * 0.8);
+  const trainFeatures = shuffled.features.slice(0, splitIdx);
+  const testFeatures = shuffled.features.slice(splitIdx);
+  const trainLabels = shuffled.labels.slice(0, splitIdx);
+  const testLabels = shuffled.labels.slice(splitIdx);
+  
+  // Scale features
+  const scaler = new MinMaxScaler();
+  const scaledTrain = scaler.fitTransform(trainFeatures);
+  const scaledTest = scaler.transform(testFeatures);
+  
+  // Train ensemble
+  classifier.train(scaledTrain, trainLabels);
+  
+  // Get ensemble predictions
+  const ensembleResult = classifier.predictWithVoting(scaledTest);
+  
+  // Calculate individual model results
+  const individualResults: { modelType: string; accuracy: number; f1Score: number }[] = [];
+  for (const modelType of modelTypes) {
+    const preds = ensembleResult.modelVotes[modelType];
+    let tp = 0, tn = 0, fp = 0, fn = 0;
+    for (let i = 0; i < preds.length; i++) {
+      if (preds[i] === 1 && testLabels[i] === 1) tp++;
+      else if (preds[i] === 0 && testLabels[i] === 0) tn++;
+      else if (preds[i] === 1 && testLabels[i] === 0) fp++;
+      else fn++;
+    }
+    const accuracy = (tp + tn) / (tp + tn + fp + fn);
+    const precision = tp / (tp + fp) || 0;
+    const recall = tp / (tp + fn) || 0;
+    const f1Score = 2 * precision * recall / (precision + recall) || 0;
+    individualResults.push({ modelType, accuracy, f1Score });
+  }
+  
+  // Calculate ensemble metrics
+  let tp = 0, tn = 0, fp = 0, fn = 0;
+  for (let i = 0; i < ensembleResult.predictions.length; i++) {
+    if (ensembleResult.predictions[i] === 1 && testLabels[i] === 1) tp++;
+    else if (ensembleResult.predictions[i] === 0 && testLabels[i] === 0) tn++;
+    else if (ensembleResult.predictions[i] === 1 && testLabels[i] === 0) fp++;
+    else fn++;
+  }
+  
+  const accuracy = (tp + tn) / (tp + tn + fp + fn);
+  const precision = tp / (tp + fp) || 0;
+  const recall = tp / (tp + fn) || 0;
+  const f1Score = 2 * precision * recall / (precision + recall) || 0;
+  
+  return {
+    ensembleResult,
+    individualResults,
+    ensembleMetrics: { accuracy, precision, recall, f1Score },
+  };
 }
 
 export function gridSearch(
@@ -2060,95 +2445,7 @@ export function generateUnlabeledReport(
   };
 }
 
-const FEATURE_DESCRIPTIONS: Record<string, string> = {
-  bytes: "Lượng dữ liệu (bytes) cao bất thường có thể chỉ ra tấn công volumetric",
-  packets: "Số lượng gói tin lớn trong thời gian ngắn là dấu hiệu của DDoS flood",
-  duration: "Thời lượng kết nối ngắn bất thường là đặc điểm của SYN flood",
-  src_ip: "Nhiều địa chỉ IP nguồn khác nhau có thể là botnet phân tán",
-  dst_ip: "Tập trung vào một IP đích là mục tiêu của cuộc tấn công",
-  protocol: "Giao thức bất thường (UDP flood, ICMP flood) thường dùng trong DDoS",
-  src_port: "Các cổng nguồn ngẫu nhiên là đặc điểm của IP spoofing",
-  dst_port: "Tập trung vào cổng cụ thể (80, 443, 53) là mục tiêu tấn công",
-  flags: "Cờ TCP bất thường (SYN flood, ACK flood) là dấu hiệu tấn công",
-  flow_duration: "Luồng dữ liệu ngắn lặp lại nhiều lần là đặc điểm botnet",
-  total_fwd_packets: "Số gói chuyển tiếp cao bất thường chỉ ra traffic flood",
-  total_bwd_packets: "Số gói phản hồi thấp bất thường chỉ ra tấn công một chiều",
-  flow_bytes_per_s: "Tốc độ bytes/giây cao là dấu hiệu tấn công bandwidth",
-  flow_packets_per_s: "Tốc độ gói/giây cao là dấu hiệu flood attack",
-  avg_packet_size: "Kích thước gói tin nhỏ đồng đều là đặc điểm SYN flood",
-  default: "Đặc trưng mạng bất thường đóng góp vào phát hiện DDoS",
-};
-
-function getFeatureDescription(feature: string): string {
-  const lowerFeature = feature.toLowerCase();
-  for (const [key, desc] of Object.entries(FEATURE_DESCRIPTIONS)) {
-    if (lowerFeature.includes(key)) {
-      return desc;
-    }
-  }
-  return FEATURE_DESCRIPTIONS.default;
-}
-
-function calculateFeatureImportance(
-  features: number[][],
-  labels: number[],
-  featureColumns: string[]
-): FeatureImportance[] {
-  const importances: FeatureImportance[] = [];
-  
-  // Check if we have any DDoS predictions
-  const hasDDoS = labels.some((l) => l === 1);
-  
-  for (let i = 0; i < featureColumns.length; i++) {
-    const featureValues = features.map((f) => f[i]);
-    
-    let importance: number;
-    
-    if (hasDDoS) {
-      // Standard approach: compare DDoS vs Normal samples
-      const ddosValues = featureValues.filter((_, idx) => labels[idx] === 1);
-      const normalValues = featureValues.filter((_, idx) => labels[idx] === 0);
-      
-      const ddosMean = ddosValues.length > 0 ? ddosValues.reduce((a, b) => a + b, 0) / ddosValues.length : 0;
-      const normalMean = normalValues.length > 0 ? normalValues.reduce((a, b) => a + b, 0) / normalValues.length : 0;
-      
-      const ddosVar = ddosValues.length > 0 
-        ? ddosValues.reduce((sum, v) => sum + Math.pow(v - ddosMean, 2), 0) / ddosValues.length 
-        : 1;
-      const normalVar = normalValues.length > 0 
-        ? normalValues.reduce((sum, v) => sum + Math.pow(v - normalMean, 2), 0) / normalValues.length 
-        : 1;
-      
-      const pooledStd = Math.sqrt((ddosVar + normalVar) / 2) || 1;
-      importance = Math.abs(ddosMean - normalMean) / pooledStd;
-    } else {
-      // No DDoS predictions - use variance-based importance
-      // Features with high variance are potentially more important for anomaly detection
-      const mean = featureValues.reduce((a, b) => a + b, 0) / featureValues.length;
-      const variance = featureValues.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / featureValues.length;
-      const std = Math.sqrt(variance);
-      
-      // Coefficient of variation (normalized variance)
-      const coeffOfVar = mean !== 0 ? std / Math.abs(mean) : std;
-      
-      // Also consider the range of values
-      const max = Math.max(...featureValues);
-      const min = Math.min(...featureValues);
-      const range = max - min;
-      
-      // Combine CV and normalized range
-      importance = Math.min((coeffOfVar + (range / (max || 1))) / 2, 1);
-    }
-    
-    importances.push({
-      feature: featureColumns[i],
-      importance: Math.min(importance, 1),
-      description: getFeatureDescription(featureColumns[i]),
-    });
-  }
-  
-  return importances.sort((a, b) => b.importance - a.importance).slice(0, 10);
-}
+// NOTE: calculateFeatureImportance and getFeatureDescription are defined at top of file
 
 function generateDDoSReasons(
   features: number[][],

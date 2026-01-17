@@ -103,6 +103,32 @@ export const insertUserTagSchema = createInsertSchema(userTags).omit({ id: true,
 export type InsertUserTag = z.infer<typeof insertUserTagSchema>;
 export type UserTag = typeof userTags.$inferSelect;
 
+// Audit logs for tracking all actions
+export const auditLogs = pgTable("audit_logs", {
+  id: serial("id").primaryKey(),
+  action: text("action").notNull(), // upload, analyze, delete, feedback, export
+  entityType: text("entity_type").notNull(), // dataset, analysis, label, feedback
+  entityId: text("entity_id"),
+  details: jsonb("details"), // Additional action details
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLogs.$inferSelect;
+
+// ============== CONFUSION MATRIX ==============
+export interface ConfusionMatrix {
+  truePositives: number;
+  trueNegatives: number;
+  falsePositives: number;
+  falseNegatives: number;
+  matrix: number[][];
+  labels: string[];
+}
+
 // Detection Mode - Supervised (có nhãn) vs Unlabeled (không có nhãn)
 export const detectionModes = ["supervised", "unlabeled"] as const;
 export type DetectionMode = typeof detectionModes[number];

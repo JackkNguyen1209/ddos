@@ -1,4 +1,6 @@
-import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle, Info, Zap, BookOpen, CheckCircle2, XCircle, Lightbulb, ListOrdered, Settings, Hash } from "lucide-react";
+import { BarChart3, Trophy, Clock, Target, Shield, AlertTriangle, Info, Zap, BookOpen, CheckCircle2, XCircle, Lightbulb, ListOrdered, Settings, Hash, Download, FileJson, FileText } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -28,9 +30,53 @@ interface AnalysisResultsProps {
 }
 
 export function AnalysisResults({ results }: AnalysisResultsProps) {
+  const { toast } = useToast();
+
   if (results.length === 0) {
     return null;
   }
+
+  const handleExportCSV = async () => {
+    try {
+      const response = await fetch('/api/export/csv');
+      if (!response.ok) throw new Error('Export failed');
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `analysis_results_${Date.now()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      toast({ title: "Xuất CSV thành công", description: "File đã được tải xuống" });
+    } catch (error) {
+      toast({ title: "Lỗi", description: "Không thể xuất CSV", variant: "destructive" });
+    }
+  };
+
+  const handleExportJSON = async () => {
+    try {
+      const response = await fetch('/api/export/json');
+      if (!response.ok) throw new Error('Export failed');
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `analysis_results_${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      toast({ title: "Xuất JSON thành công", description: "File đã được tải xuống" });
+    } catch (error) {
+      toast({ title: "Lỗi", description: "Không thể xuất JSON", variant: "destructive" });
+    }
+  };
 
   // Detect mode from results
   const mode: DetectionMode = results[0]?.mode || "supervised";
@@ -209,13 +255,27 @@ export function AnalysisResults({ results }: AnalysisResultsProps) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <BarChart3 className="h-5 w-5 text-primary" />
-            So Sánh Các Mô Hình
-          </CardTitle>
-          <CardDescription>
-            Phân tích chi tiết và so sánh hiệu suất của từng thuật toán
-          </CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <BarChart3 className="h-5 w-5 text-primary" />
+                So Sánh Các Mô Hình
+              </CardTitle>
+              <CardDescription>
+                Phân tích chi tiết và so sánh hiệu suất của từng thuật toán
+              </CardDescription>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-csv">
+                <FileText className="h-4 w-4 mr-1" />
+                CSV
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleExportJSON} data-testid="button-export-json">
+                <FileJson className="h-4 w-4 mr-1" />
+                JSON
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="comparison" className="w-full">

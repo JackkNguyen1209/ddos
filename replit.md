@@ -215,3 +215,62 @@ After analysis, users can review and correct results to improve future detection
 - Add feedback with category, severity, attack status
 - Apply feedback to improve learning system
 - Create custom tags for data classification
+
+## Performance & Security Enhancements
+
+### Analysis Caching
+- In-memory cache for analysis results (30 minutes TTL)
+- Automatic cache cleanup when size exceeds 100 entries
+- API endpoints: `GET /api/cache/stats`, `DELETE /api/cache`
+
+### Rate Limiting
+- 60 requests per minute per IP address
+- Returns HTTP 429 when limit exceeded
+- Headers: X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset
+
+### Audit Logging
+- Tracks all actions: upload, analyze, export, feedback, cache operations
+- In-memory storage (last 1000 entries)
+- API endpoint: `GET /api/audit-logs?limit=50&offset=0`
+
+### Input Validation
+- File size limit: 50MB
+- Allowed extensions: .csv, .xlsx, .xls
+- Schema detection prevents uploading dictionary/description files
+
+## Export & Batch Processing
+
+### Export API
+- `GET /api/export/csv` - Export analysis results to CSV file
+- `GET /api/export/json` - Export analysis results to JSON file
+- UI buttons available in analysis results section
+
+### Batch Processing
+- `POST /api/batch/analyze` - Process multiple datasets at once
+- Maximum 5 datasets per batch
+- Returns individual results and errors per dataset
+
+## Ensemble Learning
+
+### Voting Classifier
+- Combines predictions from multiple models using majority voting
+- Hard voting: each model gets one vote, prediction is majority
+- Available models: Decision Tree, Random Forest, KNN, Naive Bayes, Logistic Regression
+- Returns confidence scores based on vote agreement
+
+### Random Search
+- Faster alternative to Grid Search for hyperparameter tuning
+- Randomly samples parameter combinations
+- Configurable number of samples (default: 10)
+
+## Feature Importance & Confusion Matrix
+
+### Feature Importance Calculation
+- Based on discrimination power (difference of means / pooled std)
+- Correlation with label column
+- Returns top features sorted by importance
+
+### Confusion Matrix
+- True Positives, True Negatives, False Positives, False Negatives
+- Available via API: `GET /api/analysis/:resultId/confusion-matrix`
+- Visual display in analysis results

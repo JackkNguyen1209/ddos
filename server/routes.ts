@@ -1,8 +1,8 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { analyzeWithModel, getFeatureColumns, runAnomalyDetection, generateUnlabeledReport, buildFeatureMapping, getFeatureStatistics, analyzeRowForAttack } from "./ml-algorithms";
-import { uploadDatasetSchema, analyzeRequestSchema, type DataRow, type Dataset } from "@shared/schema";
+import { analyzeWithModel, getFeatureColumns, runAnomalyDetection, generateUnlabeledReport, buildFeatureMapping, getFeatureStatistics, analyzeRowForAttack, getCachedResult, setCachedResult, clearCache, getCacheStats, calculateConfusionMatrix, calculateFeatureImportance } from "./ml-algorithms";
+import { uploadDatasetSchema, analyzeRequestSchema, type DataRow, type Dataset, type InsertAuditLog } from "@shared/schema";
 import { randomUUID } from "crypto";
 import * as XLSX from "xlsx";
 import { learningService } from "./learning-service";
@@ -22,6 +22,100 @@ import {
   type LabelConfig,
   type LabelCategory
 } from "./schema-detection";
+
+// ============== RATE LIMITING ==============
+interface RateLimitEntry {
+  count: number;
+  resetTime: number;
+}
+
+const rateLimitStore = new Map<string, RateLimitEntry>();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
+const RATE_LIMIT_MAX_REQUESTS = 60; // 60 requests per minute
+
+function getRateLimitKey(req: Request): string {
+  return req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+}
+
+function rateLimitMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const key = getRateLimitKey(req);
+  const now = Date.now();
+  
+  let entry = rateLimitStore.get(key);
+  
+  if (!entry || now > entry.resetTime) {
+    entry = { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS };
+    rateLimitStore.set(key, entry);
+  } else {
+    entry.count++;
+  }
+  
+  res.setHeader('X-RateLimit-Limit', RATE_LIMIT_MAX_REQUESTS.toString());
+  res.setHeader('X-RateLimit-Remaining', Math.max(0, RATE_LIMIT_MAX_REQUESTS - entry.count).toString());
+  res.setHeader('X-RateLimit-Reset', entry.resetTime.toString());
+  
+  if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+    res.status(429).json({ 
+      error: 'Quá nhiều yêu cầu. Vui lòng thử lại sau.',
+      retryAfter: Math.ceil((entry.resetTime - now) / 1000)
+    });
+    return;
+  }
+  
+  next();
+}
+
+// Clean up old rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  const keysToDelete: string[] = [];
+  rateLimitStore.forEach((entry, key) => {
+    if (now > entry.resetTime) {
+      keysToDelete.push(key);
+    }
+  });
+  keysToDelete.forEach(key => rateLimitStore.delete(key));
+}, 5 * 60 * 1000);
+
+// ============== AUDIT LOGGING ==============
+const auditLogs: InsertAuditLog[] = [];
+const MAX_AUDIT_LOGS = 1000;
+
+function logAudit(action: string, entityType: string, entityId: string | undefined, details: any, req?: Request): void {
+  const log: InsertAuditLog = {
+    action,
+    entityType,
+    entityId,
+    details,
+    ipAddress: req?.ip || req?.headers['x-forwarded-for'] as string || null,
+    userAgent: req?.headers['user-agent'] || null,
+  };
+  
+  auditLogs.unshift(log);
+  
+  // Keep only recent logs in memory
+  if (auditLogs.length > MAX_AUDIT_LOGS) {
+    auditLogs.pop();
+  }
+}
+
+// ============== INPUT VALIDATION ==============
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const ALLOWED_EXTENSIONS = ['.csv', '.xlsx', '.xls'];
+
+function validateFileUpload(filename: string, size: number): { valid: boolean; error?: string } {
+  const ext = filename.toLowerCase().slice(filename.lastIndexOf('.'));
+  
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+    return { valid: false, error: `Định dạng file không hợp lệ. Chỉ hỗ trợ: ${ALLOWED_EXTENSIONS.join(', ')}` };
+  }
+  
+  if (size > MAX_FILE_SIZE) {
+    return { valid: false, error: `File quá lớn. Giới hạn: ${MAX_FILE_SIZE / 1024 / 1024}MB` };
+  }
+  
+  return { valid: true };
+}
 
 // Helper function to extract features for report
 function extractFeaturesForReport(data: DataRow[], featureColumns: string[]): { features: number[][] } {
@@ -354,6 +448,195 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Apply rate limiting to all API routes
+  app.use('/api', rateLimitMiddleware);
+
+  // ============== EXPORT ENDPOINTS ==============
+  app.get("/api/export/csv", async (req, res) => {
+    try {
+      const results = await storage.getResults();
+      if (!results || results.length === 0) {
+        return res.status(404).json({ error: "Không có kết quả phân tích để xuất" });
+      }
+
+      const dataset = await storage.getDataset();
+      const csvRows: string[] = [];
+      
+      // Header row with all result fields
+      csvRows.push("Model,Accuracy,Precision,Recall,F1Score,DDoSDetected,NormalTraffic");
+      
+      for (const result of results) {
+        csvRows.push([
+          result.modelType,
+          (result.accuracy * 100).toFixed(2),
+          (result.precision * 100).toFixed(2),
+          (result.recall * 100).toFixed(2),
+          (result.f1Score * 100).toFixed(2),
+          result.ddosDetected,
+          result.normalTraffic
+        ].join(","));
+      }
+
+      logAudit("export", "analysis", undefined, { format: "csv", resultCount: results.length }, req);
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="analysis_results_${Date.now()}.csv"`);
+      res.send(csvRows.join("\n"));
+    } catch (error) {
+      res.status(500).json({ error: "Export thất bại" });
+    }
+  });
+
+  app.get("/api/export/json", async (req, res) => {
+    try {
+      const results = await storage.getResults();
+      const dataset = await storage.getDataset();
+      
+      if (!results || results.length === 0) {
+        return res.status(404).json({ error: "Không có kết quả phân tích để xuất" });
+      }
+
+      const exportData = {
+        exportDate: new Date().toISOString(),
+        datasetInfo: dataset ? {
+          name: dataset.dataset.name,
+          totalRows: dataset.dataset.originalRowCount,
+          columns: dataset.dataset.columns.length,
+        } : null,
+        results: results.map(r => ({
+          modelType: r.modelType,
+          metrics: {
+            accuracy: r.accuracy,
+            precision: r.precision,
+            recall: r.recall,
+            f1Score: r.f1Score,
+          },
+          predictions: {
+            ddosDetected: r.ddosDetected,
+            normalTraffic: r.normalTraffic,
+          },
+          bestHyperparams: r.bestHyperparams,
+          crossValidation: r.crossValidation,
+        })),
+      };
+
+      logAudit("export", "analysis", undefined, { format: "json", resultCount: results.length }, req);
+
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="analysis_results_${Date.now()}.json"`);
+      res.json(exportData);
+    } catch (error) {
+      res.status(500).json({ error: "Export thất bại" });
+    }
+  });
+
+  // ============== BATCH PROCESSING ==============
+  app.post("/api/batch/analyze", async (req, res) => {
+    try {
+      const { datasets, models } = req.body;
+      
+      if (!Array.isArray(datasets) || datasets.length === 0) {
+        return res.status(400).json({ error: "Danh sách datasets không hợp lệ" });
+      }
+      
+      if (datasets.length > 5) {
+        return res.status(400).json({ error: "Tối đa 5 datasets mỗi lần" });
+      }
+
+      const batchResults: any[] = [];
+      
+      for (const datasetInfo of datasets) {
+        const { name, data } = datasetInfo;
+        try {
+          const { columns, rows } = parseDataContent(data, name);
+          const featureColumns = getFeatureColumns(columns);
+          const datasetId = randomUUID();
+          
+          const datasetResults: any[] = [];
+          const modelsToRun = models || ["decision_tree", "random_forest", "knn"];
+          
+          for (const modelType of modelsToRun) {
+            const result = await analyzeWithModel(datasetId, modelType as any, rows, featureColumns);
+            datasetResults.push(result);
+          }
+          
+          batchResults.push({
+            dataset: name,
+            status: "success",
+            results: datasetResults,
+          });
+        } catch (err) {
+          batchResults.push({
+            dataset: name,
+            status: "error",
+            error: err instanceof Error ? err.message : "Unknown error",
+          });
+        }
+      }
+
+      logAudit("batch_analyze", "analysis", undefined, { datasetCount: datasets.length, modelCount: models?.length }, req);
+
+      res.json({
+        processed: batchResults.length,
+        results: batchResults,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Batch processing thất bại" });
+    }
+  });
+
+  // ============== AUDIT LOGS ==============
+  app.get("/api/audit-logs", async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const offset = parseInt(req.query.offset as string) || 0;
+    
+    const logs = auditLogs.slice(offset, offset + limit);
+    res.json({
+      logs,
+      total: auditLogs.length,
+      limit,
+      offset,
+    });
+  });
+
+  // ============== CACHE MANAGEMENT ==============
+  app.get("/api/cache/stats", async (req, res) => {
+    const stats = getCacheStats();
+    res.json(stats);
+  });
+
+  app.delete("/api/cache", async (req, res) => {
+    clearCache();
+    logAudit("clear_cache", "system", undefined, {}, req);
+    res.json({ success: true, message: "Cache đã được xóa" });
+  });
+
+  // ============== FEATURE IMPORTANCE & CONFUSION MATRIX ==============
+  app.get("/api/analysis/:resultId/confusion-matrix", async (req, res) => {
+    try {
+      const results = await storage.getResults();
+      const result = results?.find(r => r.id === req.params.resultId);
+      
+      if (!result) {
+        return res.status(404).json({ error: "Không tìm thấy kết quả phân tích" });
+      }
+
+      // Generate confusion matrix from result predictions
+      const matrix = {
+        truePositives: result.ddosDetected,
+        trueNegatives: result.normalTraffic,
+        falsePositives: Math.round(result.ddosDetected * (1 - result.precision) / result.precision) || 0,
+        falseNegatives: Math.round(result.ddosDetected * (1 - result.recall) / result.recall) || 0,
+        matrix: [[result.normalTraffic, 0], [0, result.ddosDetected]],
+        labels: ["Normal", "DDoS"],
+      };
+
+      res.json(matrix);
+    } catch (error) {
+      res.status(500).json({ error: "Lấy confusion matrix thất bại" });
+    }
+  });
+
   app.get("/api/dataset", async (req, res) => {
     try {
       const data = await storage.getDataset();
@@ -533,6 +816,15 @@ export async function registerRoutes(
           anomalyIndicators: featureStats.anomalyIndicators,
         }
       });
+
+      // Audit log for upload
+      logAudit("upload", "dataset", dataset.id, { 
+        name, 
+        rowCount: rows.length, 
+        cleanedCount: cleanedRows.length,
+        mode,
+        schemaType 
+      }, req);
     } catch (error) {
       console.error("Upload error:", error);
       res.status(500).json({ error: "Failed to process dataset" });
@@ -599,6 +891,13 @@ export async function registerRoutes(
         await storage.addResult(resultWithMode);
         results.push(resultWithMode);
       }
+
+      // Audit log for analysis
+      logAudit("analyze", "analysis", datasetId, { 
+        modelCount: modelTypes.length, 
+        models: modelTypes,
+        mode 
+      }, req);
 
       res.json(results);
     } catch (error) {
