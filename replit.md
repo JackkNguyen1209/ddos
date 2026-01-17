@@ -1,302 +1,48 @@
 # DDoS Detection ML
 
 ## Overview
-
-A machine learning application for detecting DDoS (Distributed Denial of Service) attacks. Users can upload CSV/Excel datasets, the system automatically cleans and filters the data, then analyzes it using multiple ML algorithms (Decision Tree, Random Forest, KNN, Naive Bayes, Logistic Regression, LUCID-inspired Neural Network) to compare detection results and identify the best performing model.
-
-### Key Features
-- **Multi-format support**: CSV and Excel (.xlsx, .xls) file upload up to 50MB
-- **6 ML algorithms**: Including LUCID-inspired Neural Network with convolution filters
-- **Attack type classification**: Detects 17+ attack types across 7 categories (reconnaissance, bruteforce, remote_access, volumetric, amplification, application_layer, protocol_exploit)
-- **Vietnamese UI**: Full Vietnamese language interface
-- **Detailed explanations**: Formula-based detection with algorithm explanations
-- **Dual Mode Detection**:
-  - **Supervised Mode**: When dataset has labels → train/evaluate with Accuracy/Precision/Recall/F1
-  - **Unlabeled Inference Mode**: When no labels → runs anomaly detection (IsolationForest, LOF) and shows scores/alerts instead of fake accuracy
-- **Feature Contract**: Auto-validates required features (timing, volume, packets) and optional features (network, protocol, labels)
-- **Schema Detection**: Auto-detects if uploaded file is a schema/dictionary description vs actual data
-- **Data Quality Reports**: Missing rate, invalid values, valid rows count for unlabeled data
-- **Self-Learning System**: Remembers uploaded data across sessions and continuously improves detection accuracy
+This project is a machine learning application designed to detect Distributed Denial of Service (DDoS) attacks. It allows users to upload network traffic datasets in CSV or Excel formats. The system processes and cleans the data, then applies various machine learning algorithms, including Decision Tree, Random Forest, KNN, Naive Bayes, Logistic Regression, and a LUCID-inspired Neural Network. The primary goal is to compare the performance of these models in identifying DDoS attacks and classifying over 17 attack types across 7 categories. The application supports both supervised learning (with labeled datasets) and unsupervised anomaly detection (for unlabeled data), offering detailed explanations of detection results and a self-learning capability to improve accuracy over time. The project aims to provide a robust and intuitive tool for cybersecurity analysis.
 
 ## User Preferences
-
 Preferred communication style: Simple, everyday language.
 
 ## System Architecture
 
-### Frontend Architecture
-- **Framework**: React 18 with TypeScript
-- **Routing**: Wouter (lightweight React router)
-- **State Management**: TanStack React Query for server state and data fetching
-- **UI Components**: shadcn/ui component library built on Radix UI primitives
-- **Styling**: Tailwind CSS with CSS variables for theming (light/dark mode support)
-- **Charts**: Recharts for data visualization (bar charts, radar charts, pie charts)
-- **Build Tool**: Vite with React plugin
+### Frontend
+- **Framework**: React 18 with TypeScript.
+- **UI/UX**: Utilizes `shadcn/ui` based on Radix UI, styled with Tailwind CSS, supporting light/dark themes.
+- **Data Visualization**: Recharts for interactive data representation.
 
-### Backend Architecture
-- **Framework**: Express.js 5 with TypeScript
-- **API Pattern**: RESTful JSON API with `/api` prefix
-- **Storage**: In-memory storage (MemStorage class) for datasets and analysis results
-- **ML Processing**: Custom TypeScript implementations of ML algorithms in `server/ml-algorithms.ts`
-- **File Processing**: CSV parsing with automatic data cleaning (handles missing values, duplicates, outliers)
+### Backend
+- **Framework**: Express.js 5 with TypeScript.
+- **API**: RESTful JSON API.
+- **ML Processing**: Custom TypeScript implementations of machine learning algorithms.
+- **Data Handling**: In-memory storage for session-based datasets and results, with robust CSV parsing and data cleaning.
+- **Security**: Implements Helmet, rate limiting, and CORS.
+- **Logging**: Secure audit logging to PostgreSQL.
 
-### Data Flow
-1. User uploads CSV file → parsed and cleaned on server
-2. Dataset stored in memory with preview data
-3. User selects ML models to run
-4. Server runs analysis and stores results
-5. Frontend displays comparison charts and metrics
-
-### Key Design Decisions
-- **In-memory storage**: Chosen for simplicity; datasets are session-based and not persisted
-- **Server-side ML**: All ML algorithms run on the server to handle larger datasets
-- **Monorepo structure**: Client (`client/`), server (`server/`), and shared types (`shared/`) in one repo
-- **Path aliases**: `@/` for client source, `@shared/` for shared code
-
-### Project Structure
-```
-├── client/src/          # React frontend
-│   ├── components/      # UI components (shadcn + custom)
-│   ├── pages/           # Route pages
-│   ├── hooks/           # Custom React hooks
-│   └── lib/             # Utilities and query client
-├── server/              # Express backend
-│   ├── routes.ts        # API endpoints
-│   ├── ml-algorithms.ts # ML model implementations
-│   └── storage.ts       # In-memory data storage
-├── shared/              # Shared TypeScript types
-│   └── schema.ts        # Zod schemas for validation
-```
+### Core Features and Design Decisions
+- **Monorepo Structure**: Organized into `client/`, `server/`, and `shared/` for modularity.
+- **Data Leakage Prevention**: ML pipeline ensures data splitting occurs before preprocessing to maintain model integrity.
+- **Reproducibility**: Uses seeded random number generation and precomputed indices for deterministic results across all model evaluations.
+- **Advanced ML Practices**:
+  - **Train/Validation/Test Split**: Standard 60/20/20 data partitioning.
+  - **K-Fold Cross-Validation**: Default 5-fold validation for robust model evaluation.
+  - **Hyperparameter Tuning**: Grid Search and Random Search for optimizing model parameters.
+- **Expanded Label System**: Supports 130+ built-in labels and allows custom label definitions, enhancing attack classification.
+- **User Feedback & Review**: System for users to correct analysis results, contributing to the self-learning mechanism.
+- **Schema Detection & Model Routing**: Automatically identifies dataset schemas (e.g., CICFlowMeter vs. Event/Log), normalizes columns, and recommends appropriate ML models.
+- **Ensemble Learning**: Implements a Voting Classifier to combine predictions from multiple models.
+- **Performance**: Multipart file uploads with `multer`, PapaParse for CSV, and persistent PostgreSQL storage for metadata and audit logs.
 
 ## External Dependencies
 
-### Database
-- **Drizzle ORM** configured with PostgreSQL dialect (schema in `shared/schema.ts`)
-- Database connection via `DATABASE_URL` environment variable
-- Currently the app uses in-memory storage, but Drizzle is set up for future database persistence
-
-### Key Libraries
-- **Zod**: Schema validation for API requests and data types
-- **drizzle-zod**: Generate Zod schemas from Drizzle tables
-- **@tanstack/react-query**: Data fetching and caching
-- **Radix UI**: Accessible UI primitives (dialog, dropdown, tabs, etc.)
-- **Recharts**: React charting library
-- **class-variance-authority**: Component variant management
-
-### Build Tools
-- **Vite**: Frontend bundling with HMR
-- **esbuild**: Server bundling for production
-- **tsx**: TypeScript execution for development
-
-### Replit-specific
-- `@replit/vite-plugin-runtime-error-modal`: Error overlay in development
-- `@replit/vite-plugin-cartographer`: Replit integration
-
-## Docker Deployment
-
-The project includes Docker configuration for easy deployment:
-- `Dockerfile`: Builds the production image
-- `docker-compose.yml`: Orchestrates app + PostgreSQL database
-- `docker-entrypoint.sh`: Handles database migrations on startup
-- `.env.example`: Template for environment variables
-
-Run with: `docker compose up -d`
-Access at: http://localhost:8000
-
-## Self-Learning System
-
-The app includes a persistent learning system that accumulates knowledge across sessions:
-- **Database tables**: training_samples, model_performance, learning_sessions, learned_patterns
-- **LearningService**: Handles sample accumulation, pattern learning with batch processing (500 samples/batch)
-- **API endpoints**: /api/learning/stats, /api/learning/patterns, /api/learning/learn
-- **UI component**: LearningStats displays accumulated samples, learned patterns, and model improvements
-
-## Schema Detection & Model Routing
-
-The app includes intelligent schema detection and feature reporting:
-- **Schema Detection**: Automatically detects CICFlowMeter vs Event/Log formats
-- **Column Normalization**: Maps column aliases (flow_packets_s ↔ pps, flow_bytes_s ↔ byte_rate, etc.)
-- **Feature Report**: Shows found/missing features, NaN/Inf ratios, reliability warnings
-- **Label Mapping**: Configurable mapping (Benign→0, DrDoS_*→1, etc.)
-- **Model Routing**: Recommends appropriate models based on detected schema type
-- **UI Component**: FeatureReport displays schema type, confidence, and data quality metrics
-
-## ML Pipeline - Data Leakage Prevention
-
-The ML pipeline follows strict best practices to prevent data leakage:
-- **Split First**: Data is split into train/test BEFORE any preprocessing
-- **MinMaxScaler**: Fitted on training data ONLY, then transforms both train and test
-- **Pipeline Flow**:
-  1. `extractFeatures()` → raw features and labels
-  2. `splitData()` → train/test split (80/20)
-  3. `scaler.fitTransform(trainFeatures)` → fit on train only
-  4. `scaler.transform(testFeatures)` → transform test using train params
-  5. `model.train()` → train on scaled train data
-  6. `model.predict()` → predict on scaled test data
-- **No Information Leak**: Test set statistics never influence scaling parameters
-
-## ML Best Practices (Advanced)
-
-The app now includes advanced ML best practices for more accurate model evaluation:
-
-### Train/Validation/Test Split (60/20/20)
-- **Train set (60%)**: Used for model training
-- **Validation set (20%)**: Used for hyperparameter tuning
-- **Test set (20%)**: Used for final unbiased evaluation
-- Scaler is fitted on train only, transforms all sets
-
-### K-Fold Cross-Validation
-- Default 5-fold cross-validation for robust evaluation
-- Reports mean and std for Accuracy, Precision, Recall, F1
-- Helps detect overfitting by evaluating on multiple data splits
-
-### Hyperparameter Tuning (Grid Search)
-- Automatic search for best hyperparameters
-- Model-specific parameter grids:
-  - **Decision Tree**: maxDepth [3, 5, 8, 10, 15]
-  - **Random Forest**: numTrees [5, 10, 20, 30], maxDepth [5, 8, 10]
-  - **KNN**: k [3, 5, 7, 9, 11]
-  - **Logistic Regression**: learningRate [0.01, 0.05, 0.1, 0.2], iterations [50, 100, 200]
-  - **LUCID CNN**: numKernels [16, 32, 48], learningRate, epochs
-- Returns best parameters, best score, and top combinations
-
-### UI Tab: "ML Chuẩn"
-- Displays Train/Val/Test split sizes and metrics
-- Shows K-Fold cross-validation results with fold-by-fold breakdown
-- Displays Grid Search results with best hyperparameters
-- Available when dataset has ≥50 samples with labels
-
-## Expanded Label System
-
-The app supports comprehensive label detection across multiple dataset formats:
-- **130+ built-in labels** covering: CICFlowMeter, UNSW-NB15, NSL-KDD, and custom logs
-- **Attack vs Anomaly distinction**: isAttack=true for confirmed attacks, false for anomalies
-- **Severity levels**: low, medium, high, critical
-- **16 categories**: normal, ddos, ddos_volumetric, ddos_protocol, ddos_amplification, ddos_application, reconnaissance, bruteforce, exploit, malware, infiltration, anomaly_traffic, anomaly_behavior, anomaly_protocol, anomaly_resource, custom
-
-### Custom Label API
-- `GET /api/labels` - Get all label mappings (built-in + custom)
-- `POST /api/labels` - Add custom label with isAttack, category, severity, description
-- `PUT /api/labels` - Bulk update custom labels
-- `DELETE /api/labels/:name` - Remove custom label
-- `GET /api/labels/categories` - Get category descriptions
-
-### Label Detection Flow
-1. Check custom mappings first (user-defined)
-2. Check built-in mappings (exact match)
-3. Partial match in built-in mappings
-4. Heuristic detection (flood, exploit, anomaly patterns)
-5. Default: unknown anomaly (not confirmed attack)
-
-## User Feedback & Review System
-
-After analysis, users can review and correct results to improve future detection accuracy:
-
-### Database Tables
-- **user_feedback**: Stores user corrections with rowIndex, originalLabel, correctedLabel, isAttack, category, severity, userNotes
-- **user_tags**: Custom tags for data classification with tagName, tagColor, description, isAttackTag
-
-### Feedback API
-- `GET /api/feedback` - Get all user feedback
-- `POST /api/feedback` - Submit correction for a row (auto-adds to custom labels)
-- `POST /api/feedback/apply` - Apply pending feedback to learning system
-- `DELETE /api/feedback/:id` - Delete feedback entry
-- `GET /api/review/summary` - Get summary of pending/applied feedback
-
-### Tags API
-- `GET /api/tags` - Get all user-defined tags
-- `POST /api/tags` - Create new tag
-- `PUT /api/tags/:id/use` - Increment tag usage count
-- `DELETE /api/tags/:id` - Delete tag
-
-### UI Component: ReviewPanel
-- Located in `client/src/components/review-panel.tsx`
-- Two tabs: Feedback (corrections) and Tags (custom labels)
-- Add feedback with category, severity, attack status
-- Apply feedback to improve learning system
-- Create custom tags for data classification
-
-## Performance & Security Enhancements (P0 Updates)
-
-### Database Storage (P0-01)
-- **PostgreSQL persistent storage** for dataset metadata, analysis results, and audit logs
-- Tables: `datasets`, `analysis_results`, `audit_logs`
-- Each upload returns a unique `datasetId`
-- **Known Limitation**: Dataset rows are cached in global memory for ML analysis performance; metadata persists in DB
-
-### Multipart File Upload (P0-02)
-- Uses **multer** for proper multipart/form-data handling
-- Endpoint: `POST /api/upload/file` (FormData with 'file' field)
-- Streaming upload - no base64 encoding in JSON body
-- File size limit: 50MB
-- Magic byte validation for Excel files
-
-### CSV Parsing (P0-03)
-- Uses **PapaParse** for RFC 4180 compliant CSV parsing
-- Proper handling of quotes, commas in fields, newlines in fields
-- UTF-8 and BOM support
-- Dynamic type conversion for numbers
-
-### Security (P0-04)
-- **Helmet** security headers enabled
-- Rate limiting: 60 requests per minute per IP
-- CORS configured for UI domain only
-- Input validation on all endpoints
-
-### Secure Logging (P0-05)
-- **No response body logging** - prevents data leaks
-- RequestId (X-Request-Id) for request tracing
-- Log format: `[requestId] METHOD /path STATUS durationMs`
-- All audit logs stored in PostgreSQL (not in-memory)
-
-### Analysis Caching
-- In-memory cache for analysis results (30 minutes TTL)
-- Automatic cache cleanup when size exceeds 100 entries
-- API endpoints: `GET /api/cache/stats`, `DELETE /api/cache`
-
-### Audit Logging
-- Tracks all actions: upload, analyze, export, feedback, cache operations
-- **PostgreSQL storage** (persistent)
-- API endpoint: `GET /api/audit-logs?limit=50&offset=0`
-
-### Input Validation
-- File size limit: 50MB
-- Allowed extensions: .csv, .xlsx, .xls
-- Schema detection prevents uploading dictionary/description files
-
-## Export & Batch Processing
-
-### Export API
-- `GET /api/export/csv` - Export analysis results to CSV file
-- `GET /api/export/json` - Export analysis results to JSON file
-- UI buttons available in analysis results section
-
-### Batch Processing
-- `POST /api/batch/analyze` - Process multiple datasets at once
-- Maximum 5 datasets per batch
-- Returns individual results and errors per dataset
-
-## Ensemble Learning
-
-### Voting Classifier
-- Combines predictions from multiple models using majority voting
-- Hard voting: each model gets one vote, prediction is majority
-- Available models: Decision Tree, Random Forest, KNN, Naive Bayes, Logistic Regression
-- Returns confidence scores based on vote agreement
-
-### Random Search
-- Faster alternative to Grid Search for hyperparameter tuning
-- Randomly samples parameter combinations
-- Configurable number of samples (default: 10)
-
-## Feature Importance & Confusion Matrix
-
-### Feature Importance Calculation
-- Based on discrimination power (difference of means / pooled std)
-- Correlation with label column
-- Returns top features sorted by importance
-
-### Confusion Matrix
-- True Positives, True Negatives, False Positives, False Negatives
-- Available via API: `GET /api/analysis/:resultId/confusion-matrix`
-- Visual display in analysis results
+- **Database**: PostgreSQL with Drizzle ORM for persistent storage of metadata, analysis results, and audit logs.
+- **Validation**: Zod for schema validation.
+- **Data Fetching**: `@tanstack/react-query` for server state management.
+- **UI Components**: Radix UI primitives, `shadcn/ui`.
+- **Charting**: Recharts.
+- **Build Tools**: Vite (frontend), esbuild (server), tsx (development).
+- **Security Middleware**: Helmet.
+- **CSV Parsing**: PapaParse.
+- **File Upload**: Multer.

@@ -1,9 +1,39 @@
 import type { DataRow, MLModelType, AnalysisResult, FeatureImportance, DDoSReason, AttackTypeResult, DDoSAttackType } from "@shared/schema";
 import { randomUUID } from "crypto";
+import seedrandom from "seedrandom";
 
+// ============== SEEDED RANDOM NUMBER GENERATOR ==============
+// Global seed for deterministic results - can be set per-session
+let globalSeed: string = "ddos-ml-default-seed";
+
+export function setGlobalSeed(seed: string): void {
+  globalSeed = seed;
+}
+
+export function getGlobalSeed(): string {
+  return globalSeed;
+}
+
+// Create a seeded RNG instance
+function createRng(seed?: string): () => number {
+  return seedrandom(seed || globalSeed);
+}
+
+// Seeded shuffle function for deterministic results
+function seededShuffle<T>(array: T[], rng: () => number): T[] {
+  const result = [...array];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+// ============== ENHANCED TRAINING DATA WITH LABEL DETECTION ==============
 interface TrainingData {
   features: number[][];
   labels: number[];
+  hasLabel: boolean; // New: indicates if dataset has real labels
 }
 
 // ============== ANALYSIS CACHE ==============
@@ -185,9 +215,11 @@ export function randomSearch(
   labels: number[],
   modelType: MLModelType,
   numSamples: number = 10,
-  kFolds: number = 3
+  kFolds: number = 3,
+  seed?: string
 ): RandomSearchResult {
   const startTime = Date.now();
+  const rng = createRng(seed);
   const configs = MODEL_HYPERPARAMS[modelType] || [];
   
   if (configs.length === 0) {
@@ -200,19 +232,23 @@ export function randomSearch(
     };
   }
   
+  // Precompute folds for fair comparison across samples
+  const precomputedFolds = makeKFolds(features.length, kFolds, seed || globalSeed);
+  
   const allResults: Array<{ params: Record<string, any>; score: number }> = [];
   let bestParams: Record<string, any> = {};
   let bestScore = -1;
   
   for (let i = 0; i < numSamples; i++) {
-    // Randomly sample one value from each hyperparameter
+    // Use seeded RNG to sample hyperparameters
     const params: Record<string, any> = {};
     for (const config of configs) {
-      const randomIdx = Math.floor(Math.random() * config.values.length);
+      const randomIdx = Math.floor(rng() * config.values.length);
       params[config.name] = config.values[randomIdx];
     }
     
-    const cvResult = kFoldCrossValidation(features, labels, modelType, kFolds, params);
+    // Use precomputed folds for fair comparison
+    const cvResult = kFoldCrossValidation(features, labels, modelType, kFolds, params, seed, precomputedFolds);
     const score = cvResult.meanF1;
     
     allResults.push({ params, score });
@@ -237,15 +273,17 @@ export function randomSearch(
 function extractFeatures(data: DataRow[], featureColumns: string[]): TrainingData {
   const features: number[][] = [];
   const labels: number[] = [];
+  let hasLabel = false; // Track if any row has a real label
 
   for (const row of data) {
     const featureVector: number[] = [];
     for (const col of featureColumns) {
       const value = row[col];
       if (typeof value === "number") {
-        featureVector.push(value);
+        featureVector.push(isNaN(value) || !isFinite(value) ? 0 : value);
       } else if (typeof value === "string") {
-        featureVector.push(parseFloat(value) || 0);
+        const parsed = parseFloat(value);
+        featureVector.push(isNaN(parsed) || !isFinite(parsed) ? 0 : parsed);
       } else {
         featureVector.push(0);
       }
@@ -253,7 +291,8 @@ function extractFeatures(data: DataRow[], featureColumns: string[]): TrainingDat
     features.push(featureVector);
 
     const label = row["label"] || row["Label"] || row["class"] || row["Class"] || row["attack"] || row["Attack"];
-    if (label !== undefined) {
+    if (label !== undefined && label !== null && label !== "") {
+      hasLabel = true; // Found at least one real label
       if (typeof label === "number") {
         labels.push(label > 0 ? 1 : 0);
       } else {
@@ -261,11 +300,12 @@ function extractFeatures(data: DataRow[], featureColumns: string[]): TrainingDat
         labels.push(lowerLabel.includes("ddos") || lowerLabel.includes("attack") || lowerLabel === "1" ? 1 : 0);
       }
     } else {
+      // No label for this row - push placeholder (will be ignored if hasLabel = false)
       labels.push(0);
     }
   }
 
-  return { features, labels };
+  return { features, labels, hasLabel };
 }
 
 class MinMaxScaler {
@@ -318,19 +358,16 @@ function normalizeFeatures(features: number[][]): number[][] {
 function splitData(
   features: number[][],
   labels: number[],
-  testRatio: number = 0.2
+  testRatio: number = 0.2,
+  seed?: string
 ): {
   trainFeatures: number[][];
   trainLabels: number[];
   testFeatures: number[][];
   testLabels: number[];
 } {
-  const indices = features.map((_, i) => i);
-  for (let i = indices.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [indices[i], indices[j]] = [indices[j], indices[i]];
-  }
-
+  const rng = createRng(seed);
+  const indices = seededShuffle(features.map((_, i) => i), rng);
   const splitPoint = Math.floor(features.length * (1 - testRatio));
 
   return {
@@ -339,6 +376,50 @@ function splitData(
     testFeatures: indices.slice(splitPoint).map((i) => features[i]),
     testLabels: indices.slice(splitPoint).map((i) => labels[i]),
   };
+}
+
+// ============== PRECOMPUTED SPLIT INDICES FOR FAIR MODEL COMPARISON ==============
+export interface SplitIndices {
+  trainIdx: number[];
+  valIdx: number[];
+  testIdx: number[];
+}
+
+// Create fixed split indices that can be reused across models for fair comparison
+export function makeSplitIndices(
+  n: number,
+  seed: string,
+  trainRatio: number = 0.6,
+  valRatio: number = 0.2,
+  testRatio: number = 0.2
+): SplitIndices {
+  const rng = createRng(seed);
+  const indices = seededShuffle(Array.from({ length: n }, (_, i) => i), rng);
+  
+  const trainEnd = Math.floor(n * trainRatio);
+  const valEnd = trainEnd + Math.floor(n * valRatio);
+  
+  return {
+    trainIdx: indices.slice(0, trainEnd),
+    valIdx: indices.slice(trainEnd, valEnd),
+    testIdx: indices.slice(valEnd),
+  };
+}
+
+// ============== PRECOMPUTED K-FOLD INDICES ==============
+export function makeKFolds(n: number, k: number, seed: string): number[][] {
+  const rng = createRng(seed);
+  const indices = seededShuffle(Array.from({ length: n }, (_, i) => i), rng);
+  const foldSize = Math.floor(n / k);
+  const folds: number[][] = [];
+  
+  for (let fold = 0; fold < k; fold++) {
+    const start = fold * foldSize;
+    const end = fold === k - 1 ? n : (fold + 1) * foldSize;
+    folds.push(indices.slice(start, end));
+  }
+  
+  return folds;
 }
 
 // ============== ML BEST PRACTICES: Train/Validation/Test Split ==============
@@ -365,28 +446,41 @@ export function splitTrainValTest(
   labels: number[],
   trainRatio: number = 0.6,
   valRatio: number = 0.2,
-  testRatio: number = 0.2
+  testRatio: number = 0.2,
+  seed?: string,
+  precomputedIndices?: SplitIndices
 ): TrainValTestSplit {
-  const indices = features.map((_, i) => i);
-  for (let i = indices.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [indices[i], indices[j]] = [indices[j], indices[i]];
+  let trainIdx: number[], valIdx: number[], testIdx: number[];
+  
+  if (precomputedIndices) {
+    // Use precomputed indices for fair model comparison
+    trainIdx = precomputedIndices.trainIdx;
+    valIdx = precomputedIndices.valIdx;
+    testIdx = precomputedIndices.testIdx;
+  } else {
+    // Generate new indices with seeded shuffle
+    const rng = createRng(seed);
+    const indices = seededShuffle(features.map((_, i) => i), rng);
+    
+    const trainEnd = Math.floor(features.length * trainRatio);
+    const valEnd = trainEnd + Math.floor(features.length * valRatio);
+    
+    trainIdx = indices.slice(0, trainEnd);
+    valIdx = indices.slice(trainEnd, valEnd);
+    testIdx = indices.slice(valEnd);
   }
 
-  const trainEnd = Math.floor(features.length * trainRatio);
-  const valEnd = trainEnd + Math.floor(features.length * valRatio);
-
   return {
-    trainFeatures: indices.slice(0, trainEnd).map((i) => features[i]),
-    trainLabels: indices.slice(0, trainEnd).map((i) => labels[i]),
-    valFeatures: indices.slice(trainEnd, valEnd).map((i) => features[i]),
-    valLabels: indices.slice(trainEnd, valEnd).map((i) => labels[i]),
-    testFeatures: indices.slice(valEnd).map((i) => features[i]),
-    testLabels: indices.slice(valEnd).map((i) => labels[i]),
+    trainFeatures: trainIdx.map((i) => features[i]),
+    trainLabels: trainIdx.map((i) => labels[i]),
+    valFeatures: valIdx.map((i) => features[i]),
+    valLabels: valIdx.map((i) => labels[i]),
+    testFeatures: testIdx.map((i) => features[i]),
+    testLabels: testIdx.map((i) => labels[i]),
     splitInfo: {
-      trainSize: trainEnd,
-      valSize: valEnd - trainEnd,
-      testSize: features.length - valEnd,
+      trainSize: trainIdx.length,
+      valSize: valIdx.length,
+      testSize: testIdx.length,
       trainRatio,
       valRatio,
       testRatio,
@@ -420,25 +514,24 @@ export function kFoldCrossValidation(
   labels: number[],
   modelType: MLModelType,
   k: number = 5,
-  hyperparams?: Record<string, any>
+  hyperparams?: Record<string, any>,
+  seed?: string,
+  precomputedFolds?: number[][]
 ): CrossValidationResult {
-  const foldSize = Math.floor(features.length / k);
-  const indices = features.map((_, i) => i);
+  // Use precomputed folds or generate new ones with seeded shuffle
+  let folds: number[][];
   
-  // Shuffle indices
-  for (let i = indices.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [indices[i], indices[j]] = [indices[j], indices[i]];
+  if (precomputedFolds) {
+    folds = precomputedFolds;
+  } else {
+    folds = makeKFolds(features.length, k, seed || globalSeed);
   }
 
   const foldResults: CrossValidationResult["foldResults"] = [];
 
-  for (let fold = 0; fold < k; fold++) {
-    const valStart = fold * foldSize;
-    const valEnd = fold === k - 1 ? features.length : (fold + 1) * foldSize;
-    
-    const valIndices = indices.slice(valStart, valEnd);
-    const trainIndices = [...indices.slice(0, valStart), ...indices.slice(valEnd)];
+  for (let fold = 0; fold < folds.length; fold++) {
+    const valIndices = folds[fold];
+    const trainIndices = folds.flatMap((f, i) => i !== fold ? f : []);
 
     const trainFeatures = trainIndices.map((i) => features[i]);
     const trainLabels = trainIndices.map((i) => labels[i]);
@@ -450,8 +543,8 @@ export function kFoldCrossValidation(
     const scaledTrainFeatures = scaler.fitTransform(trainFeatures);
     const scaledValFeatures = scaler.transform(valFeatures);
 
-    // Create and train model
-    const model = createModelWithHyperparams(modelType, hyperparams);
+    // Create and train model (thread seed for deterministic RandomForest bootstrap)
+    const model = createModelWithHyperparams(modelType, hyperparams, seed);
     model.train(scaledTrainFeatures, trainLabels);
     const predictions = model.predict(scaledValFeatures);
 
@@ -559,12 +652,13 @@ function generateParamCombinations(configs: HyperparameterConfig[]): Record<stri
   return combinations;
 }
 
-function createModelWithHyperparams(modelType: MLModelType, params?: Record<string, any>): any {
+function createModelWithHyperparams(modelType: MLModelType, params?: Record<string, any>, seed?: string): any {
   switch (modelType) {
     case "decision_tree":
       return new DecisionTree(params?.maxDepth ?? 10);
     case "random_forest":
-      return new RandomForestWithDepth(params?.numTrees ?? 10, params?.maxDepth ?? 8);
+      // Pass seed for deterministic bootstrap sampling
+      return new RandomForestWithDepth(params?.numTrees ?? 10, params?.maxDepth ?? 8, seed);
     case "knn":
       return new KNN(params?.k ?? 5);
     case "naive_bayes":
@@ -588,10 +682,12 @@ class RandomForestWithDepth {
   private trees: DecisionTree[] = [];
   private numTrees: number;
   private maxDepth: number;
+  private rng: () => number;
 
-  constructor(numTrees: number = 10, maxDepth: number = 8) {
+  constructor(numTrees: number = 10, maxDepth: number = 8, seed?: string) {
     this.numTrees = numTrees;
     this.maxDepth = maxDepth;
+    this.rng = createRng(seed);
   }
 
   train(features: number[][], labels: number[]): void {
@@ -600,7 +696,8 @@ class RandomForestWithDepth {
       const sampleSize = Math.floor(features.length * 0.8);
       const indices: number[] = [];
       for (let i = 0; i < sampleSize; i++) {
-        indices.push(Math.floor(Math.random() * features.length));
+        // Use seeded RNG for deterministic bootstrap sampling
+        indices.push(Math.floor(this.rng() * features.length));
       }
       const sampledFeatures = indices.map((i) => features[i]);
       const sampledLabels = indices.map((i) => labels[i]);
@@ -692,14 +789,10 @@ export class VotingClassifier {
   }
 }
 
-// Shuffle data while keeping features and labels aligned
-function shuffleData(features: number[][], labels: number[]): { features: number[][]; labels: number[] } {
-  const indices = features.map((_, i) => i);
-  // Fisher-Yates shuffle
-  for (let i = indices.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [indices[i], indices[j]] = [indices[j], indices[i]];
-  }
+// Shuffle data while keeping features and labels aligned (uses seeded RNG)
+function shuffleData(features: number[][], labels: number[], seed?: string): { features: number[][]; labels: number[] } {
+  const rng = createRng(seed);
+  const indices = seededShuffle(features.map((_, i) => i), rng);
   return {
     features: indices.map(i => features[i]),
     labels: indices.map(i => labels[i]),
@@ -709,7 +802,8 @@ function shuffleData(features: number[][], labels: number[]): { features: number
 export function runEnsembleAnalysis(
   features: number[][],
   labels: number[],
-  modelTypes: MLModelType[] = ['decision_tree', 'random_forest', 'knn', 'naive_bayes', 'logistic_regression']
+  modelTypes: MLModelType[] = ['decision_tree', 'random_forest', 'knn', 'naive_bayes', 'logistic_regression'],
+  seed?: string
 ): {
   ensembleResult: EnsembleResult;
   individualResults: { modelType: string; accuracy: number; f1Score: number }[];
@@ -717,8 +811,8 @@ export function runEnsembleAnalysis(
 } {
   const classifier = new VotingClassifier(modelTypes);
   
-  // Shuffle data to avoid ordering bias before split
-  const shuffled = shuffleData(features, labels);
+  // Shuffle data to avoid ordering bias before split (with seed for reproducibility)
+  const shuffled = shuffleData(features, labels, seed);
   
   // Split data 80/20 for train/test
   const splitIdx = Math.floor(shuffled.features.length * 0.8);
@@ -782,7 +876,8 @@ export function gridSearch(
   labels: number[],
   modelType: MLModelType,
   kFolds: number = 3,
-  maxCombinations: number = 20
+  maxCombinations: number = 20,
+  seed?: string
 ): GridSearchResult {
   const startTime = Date.now();
   const configs = MODEL_HYPERPARAMS[modelType] || [];
@@ -794,12 +889,17 @@ export function gridSearch(
     allCombinations = allCombinations.filter((_, i) => i % step === 0);
   }
 
+  // CRITICAL FIX: Precompute folds ONCE and reuse for all hyperparams
+  // This ensures fair comparison between hyperparameter combinations
+  const precomputedFolds = makeKFolds(features.length, kFolds, seed || globalSeed);
+
   const allResults: GridSearchResult["allResults"] = [];
   let bestParams: Record<string, any> = {};
   let bestScore = -1;
 
   for (const params of allCombinations) {
-    const cvResult = kFoldCrossValidation(features, labels, modelType, kFolds, params);
+    // Use precomputed folds for all hyperparam evaluations
+    const cvResult = kFoldCrossValidation(features, labels, modelType, kFolds, params, seed, precomputedFolds);
     const score = cvResult.meanF1; // Use F1 as the optimization metric
 
     allResults.push({
@@ -830,6 +930,7 @@ export function gridSearch(
 
 export interface EnhancedTrainingResult {
   model: any;
+  scaler: MinMaxScaler; // CRITICAL: Return scaler fitted on training data
   trainMetrics: ReturnType<typeof calculateMetrics>;
   valMetrics: ReturnType<typeof calculateMetrics>;
   testMetrics: ReturnType<typeof calculateMetrics>;
@@ -838,6 +939,7 @@ export interface EnhancedTrainingResult {
   bestHyperparams: Record<string, any>;
   splitInfo: TrainValTestSplit["splitInfo"];
   trainingTime: number;
+  trueLabels: number[]; // CRITICAL: Store true labels for feature importance
 }
 
 export function trainModelWithBestPractices(
@@ -851,6 +953,7 @@ export function trainModelWithBestPractices(
     trainRatio?: number;
     valRatio?: number;
     testRatio?: number;
+    seed?: string; // Add seed for deterministic training
   } = {}
 ): EnhancedTrainingResult {
   const startTime = Date.now();
@@ -861,10 +964,14 @@ export function trainModelWithBestPractices(
     trainRatio = 0.6,
     valRatio = 0.2,
     testRatio = 0.2,
+    seed = globalSeed, // Use global seed by default
   } = options;
 
-  // 1. Split data into train/val/test
-  const split = splitTrainValTest(features, labels, trainRatio, valRatio, testRatio);
+  // CRITICAL: Precompute split indices for deterministic, fair comparison
+  const splitIndices = makeSplitIndices(features.length, seed, trainRatio, valRatio, testRatio);
+
+  // 1. Split data into train/val/test using precomputed indices
+  const split = splitTrainValTest(features, labels, trainRatio, valRatio, testRatio, seed, splitIndices);
 
   // 2. Grid Search for best hyperparameters (on train+val)
   let gridSearchResult: GridSearchResult | undefined;
@@ -873,7 +980,8 @@ export function trainModelWithBestPractices(
   if (useGridSearch && MODEL_HYPERPARAMS[modelType]?.length > 0) {
     const trainValFeatures = [...split.trainFeatures, ...split.valFeatures];
     const trainValLabels = [...split.trainLabels, ...split.valLabels];
-    gridSearchResult = gridSearch(trainValFeatures, trainValLabels, modelType, 3, 15);
+    // Thread seed into gridSearch for deterministic hyperparameter tuning
+    gridSearchResult = gridSearch(trainValFeatures, trainValLabels, modelType, 3, 15, seed);
     bestHyperparams = gridSearchResult.bestParams;
   }
 
@@ -882,12 +990,16 @@ export function trainModelWithBestPractices(
   if (useCrossValidation) {
     const trainValFeatures = [...split.trainFeatures, ...split.valFeatures];
     const trainValLabels = [...split.trainLabels, ...split.valLabels];
+    // Precompute folds for fair comparison
+    const precomputedFolds = makeKFolds(trainValFeatures.length, kFolds, seed);
     crossValidation = kFoldCrossValidation(
       trainValFeatures,
       trainValLabels,
       modelType,
       kFolds,
-      bestHyperparams
+      bestHyperparams,
+      seed,
+      precomputedFolds
     );
   }
 
@@ -897,8 +1009,8 @@ export function trainModelWithBestPractices(
   const scaledValFeatures = scaler.transform(split.valFeatures);
   const scaledTestFeatures = scaler.transform(split.testFeatures);
 
-  // 5. Train final model with best hyperparams
-  const model = createModelWithHyperparams(modelType, bestHyperparams);
+  // 5. Train final model with best hyperparams (thread seed for determinism)
+  const model = createModelWithHyperparams(modelType, bestHyperparams, seed);
   model.train(scaledTrainFeatures, split.trainLabels);
 
   // 6. Evaluate on all sets
@@ -908,6 +1020,7 @@ export function trainModelWithBestPractices(
 
   return {
     model,
+    scaler, // CRITICAL: Return scaler fitted on training data for consistent prediction
     trainMetrics: calculateMetrics(trainPredictions, split.trainLabels),
     valMetrics: calculateMetrics(valPredictions, split.valLabels),
     testMetrics: calculateMetrics(testPredictions, split.testLabels),
@@ -916,6 +1029,7 @@ export function trainModelWithBestPractices(
     bestHyperparams,
     splitInfo: split.splitInfo,
     trainingTime: Date.now() - startTime,
+    trueLabels: [...split.trainLabels, ...split.valLabels, ...split.testLabels], // Store all true labels
   };
 }
 
@@ -1073,9 +1187,11 @@ class DecisionTree {
 class RandomForest {
   private trees: DecisionTree[] = [];
   private numTrees: number;
+  private rng: () => number;
 
-  constructor(numTrees: number = 10) {
+  constructor(numTrees: number = 10, seed?: string) {
     this.numTrees = numTrees;
+    this.rng = createRng(seed);
   }
 
   train(features: number[][], labels: number[]): void {
@@ -1084,7 +1200,8 @@ class RandomForest {
       const sampleSize = Math.floor(features.length * 0.8);
       const indices: number[] = [];
       for (let i = 0; i < sampleSize; i++) {
-        indices.push(Math.floor(Math.random() * features.length));
+        // Use seeded RNG for deterministic bootstrap sampling
+        indices.push(Math.floor(this.rng() * features.length));
       }
       const sampledFeatures = indices.map((i) => features[i]);
       const sampledLabels = indices.map((i) => labels[i]);
@@ -1696,16 +1813,18 @@ export async function analyzeWithModel(
     // Use test metrics as the main metrics
     const metrics = enhancedResult.testMetrics;
     
-    // Scale all features for final predictions
-    const scaler = new MinMaxScaler();
-    const allFeaturesScaled = scaler.fitTransform(features);
+    // CRITICAL FIX: Use scaler from training (fitted on train data) to transform all features
+    // This prevents data leakage - we use the same scaler used during training
+    const allFeaturesScaled = enhancedResult.scaler.transform(features);
     const allPredictions = enhancedResult.model.predict(allFeaturesScaled);
     const ddosDetected = allPredictions.filter((p: number) => p === 1).length;
     const normalTraffic = allPredictions.filter((p: number) => p === 0).length;
 
     const trainingTime = (Date.now() - startTime) / 1000;
 
-    const featureImportance = calculateFeatureImportance(allFeaturesScaled, allPredictions, featureColumns);
+    // CRITICAL FIX: Use true labels (not predictions) for feature importance
+    // Feature importance measures how features relate to actual classes, not model output
+    const featureImportance = calculateFeatureImportance(allFeaturesScaled, labels, featureColumns);
     const ddosReasons = generateDDoSReasons(allFeaturesScaled, allPredictions, featureColumns, featureImportance);
     const attackTypes = classifyAttackTypes(data, allPredictions, featureColumns);
 
@@ -1823,7 +1942,9 @@ export async function analyzeWithModel(
 
   const trainingTime = (Date.now() - startTime) / 1000;
 
-  const featureImportance = calculateFeatureImportance(allFeaturesScaled, allPredictions, featureColumns);
+  // CRITICAL FIX: Use true labels (not predictions) for feature importance
+  // Feature importance measures how features relate to actual classes, not model output
+  const featureImportance = calculateFeatureImportance(allFeaturesScaled, labels, featureColumns);
   const ddosReasons = generateDDoSReasons(allFeaturesScaled, allPredictions, featureColumns, featureImportance);
   
   const attackTypes = classifyAttackTypes(data, allPredictions, featureColumns);
@@ -2181,22 +2302,24 @@ export function getFeatureColumns(columns: string[]): string[] {
 
 // ============== ANOMALY DETECTION ALGORITHMS (Epic 4) ==============
 
-// Isolation Forest - Anomaly Detection
+// Isolation Forest - Anomaly Detection (with seeded RNG for reproducibility)
 class IsolationForest {
   private trees: IsolationTree[] = [];
   private numTrees: number;
   private sampleSize: number;
+  private rng: () => number;
   
-  constructor(numTrees: number = 100, sampleSize: number = 256) {
+  constructor(numTrees: number = 100, sampleSize: number = 256, seed?: string) {
     this.numTrees = numTrees;
     this.sampleSize = sampleSize;
+    this.rng = createRng(seed);
   }
   
   fit(data: number[][]): void {
     this.trees = [];
     for (let i = 0; i < this.numTrees; i++) {
       const sample = this.subsample(data, Math.min(this.sampleSize, data.length));
-      const tree = new IsolationTree();
+      const tree = new IsolationTree(this.rng);
       tree.fit(sample, 0, Math.ceil(Math.log2(this.sampleSize)));
       this.trees.push(tree);
     }
@@ -2205,7 +2328,8 @@ class IsolationForest {
   private subsample(data: number[][], size: number): number[][] {
     const indices = new Set<number>();
     while (indices.size < size) {
-      indices.add(Math.floor(Math.random() * data.length));
+      // Use seeded RNG for deterministic sampling
+      indices.add(Math.floor(this.rng() * data.length));
     }
     return Array.from(indices).map(i => data[i]);
   }
@@ -2235,6 +2359,11 @@ class IsolationTree {
   private right: IsolationTree | null = null;
   private isLeaf: boolean = true;
   private size: number = 0;
+  private rng: () => number;
+  
+  constructor(rng?: () => number) {
+    this.rng = rng || createRng();
+  }
   
   fit(data: number[][], depth: number, maxDepth: number): void {
     this.size = data.length;
@@ -2245,7 +2374,8 @@ class IsolationTree {
     }
     
     const numFeatures = data[0].length;
-    this.splitFeature = Math.floor(Math.random() * numFeatures);
+    // Use seeded RNG for deterministic feature selection
+    this.splitFeature = Math.floor(this.rng() * numFeatures);
     
     const featureValues = data.map(row => row[this.splitFeature]);
     const minVal = Math.min(...featureValues);
@@ -2256,19 +2386,20 @@ class IsolationTree {
       return;
     }
     
-    this.splitValue = minVal + Math.random() * (maxVal - minVal);
+    // Use seeded RNG for deterministic split value
+    this.splitValue = minVal + this.rng() * (maxVal - minVal);
     this.isLeaf = false;
     
     const leftData = data.filter(row => row[this.splitFeature] < this.splitValue);
     const rightData = data.filter(row => row[this.splitFeature] >= this.splitValue);
     
     if (leftData.length > 0) {
-      this.left = new IsolationTree();
+      this.left = new IsolationTree(this.rng);
       this.left.fit(leftData, depth + 1, maxDepth);
     }
     
     if (rightData.length > 0) {
-      this.right = new IsolationTree();
+      this.right = new IsolationTree(this.rng);
       this.right.fit(rightData, depth + 1, maxDepth);
     }
   }
@@ -2360,13 +2491,16 @@ class LocalOutlierFactor {
   }
 }
 
-// Anomaly detection cho Unlabeled mode
+// Anomaly detection cho Unlabeled mode (with seeded RNG for reproducibility)
 export function runAnomalyDetection(
   features: number[][],
-  threshold: number = 0.5
+  threshold: number = 0.5,
+  seed?: string
 ): { scores: number[]; isAnomalous: boolean[]; avgScore: number; alertRate: number } {
-  // Isolation Forest
-  const isoForest = new IsolationForest(50, Math.min(256, features.length));
+  const rng = createRng(seed);
+  
+  // Isolation Forest (with seed for reproducibility)
+  const isoForest = new IsolationForest(50, Math.min(256, features.length), seed);
   isoForest.fit(features);
   const isoScores = isoForest.predict(features);
   
@@ -2379,7 +2513,8 @@ export function runAnomalyDetection(
   // Combine scores
   const scores = isoScores.map((isoScore, i) => {
     // Normalize LOF để scale tương tự Isolation Forest
-    const lofIdx = i < sampleSize ? i : Math.floor(Math.random() * sampleSize);
+    // CRITICAL FIX: Use seeded RNG and correct index - i points to current feature, not random
+    const lofIdx = i < sampleSize ? i : Math.floor(rng() * sampleSize);
     const lofScoreNorm = Math.min(1, Math.max(0, (lof.predict([features[lofIdx]])[0] - 1) / 2));
     return (isoScore * 0.7 + lofScoreNorm * 0.3);
   });

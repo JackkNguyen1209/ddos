@@ -1,0 +1,201 @@
+1) Sửa lỗi “scaling mismatch” khi predict toàn bộ dataset (CỰC QUAN TRỌNG)
+Vấn đề
+
+Model được train trên dữ liệu đã scale theo train min/max, nhưng khi predict toàn bộ dataset lại scale theo all-data min/max ⇒ dự đoán và “ddosDetected/attackTypes/reason” có thể sai.
+
+Cần sửa
+
+trainModelWithBestPractices() phải trả về scaler đã fit trên train (hoặc min/max).
+
+analyzeWithModel() phải dùng đúng scaler đó để transform features trước khi predict().
+
+Cách làm (gợi ý code)
+
+A. Đổi return type của trainModelWithBestPractices:
+
+type TrainedPack = {
+  model: MLModel;
+  scaler: MinMaxScaler; // scaler đã fit trên train
+  bestParams?: Record<string, any>;
+  performance: {...};
+};
+
+
+B. Trong analyzeWithModel (best-practices branch):
+
+const trained = await trainModelWithBestPractices(...);
+
+// Dùng scaler của trained, KHÔNG tạo scaler mới
+const allFeaturesScaled = trained.scaler.transform(features);
+const allPredictions = trained.model.predict(allFeaturesScaled);
+
+AC (điều kiện nghiệm thu)
+
+Khi cùng 1 dataset, chạy 2 lần kết quả không “nhảy” bất thường.
+
+KNN/LogReg/DT/RF cho output hợp lý và nhất quán hơn (đặc biệt khi data có outliers).
+
+2) So sánh mô hình “công bằng” (fixed split / fixed seed)
+Vấn đề
+
+Bạn đang loop nhiều model và mỗi model lại tự shuffle/split khác nhau ⇒ so sánh Accuracy/F1 không công bằng.
+
+Cần sửa
+
+Ở /api/analyze (khi user chọn compare models): tạo một bộ indices/split duy nhất rồi truyền cho từng model.
+
+Tất cả model dùng chung:
+
+trainIdx, valIdx, testIdx (hoặc train/test)
+
+seed chung
+
+Cách làm
+
+Thêm hàm makeSplitIndices(n, seed) trả {trainIdx, valIdx, testIdx}
+
+Sửa splitTrainValTest() để nhận seed hoặc nhận indices.
+
+const split = makeSplitIndices(features.length, seed);
+
+for (const modelType of modelTypes) {
+  results[modelType] = analyzeWithModel(dataset, modelType, { split, seed });
+}
+
+AC
+
+So sánh 5 model trên cùng dataset: tất cả dùng cùng test set.
+
+Chạy lại 3 lần (cùng seed) → metrics giống nhau.
+
+3) GridSearch/CV phải “fixed folds” (không shuffle mỗi lần)
+Vấn đề
+
+gridSearch() gọi kFoldCrossValidation() nhiều lần, mà mỗi lần lại shuffle folds khác nhau ⇒ hyperparam thắng do “may mắn split”.
+
+Cần sửa
+
+Precompute folds một lần (theo seed), rồi reuse cho tất cả hyperparams.
+
+Cách làm
+
+Viết makeKFolds(n, k, seed) trả folds: number[][]
+
+Sửa kFoldCrossValidation(..., folds) để dùng folds sẵn.
+
+Trong gridSearch, tạo folds 1 lần.
+
+AC
+
+BestParams ổn định hơn qua nhiều lần chạy.
+
+Chênh lệch giữa các hyperparam phản ánh model, không phản ánh split.
+
+4) Tách hẳn “Supervised vs Unlabeled” (loại bỏ metrics ảo)
+Vấn đề
+
+Khi không có label, code đang default labels = 0 ⇒ Accuracy/F1 “ảo” (thậm chí 100%).
+
+Cần sửa
+
+extractFeatures() phải trả:
+
+labels?: number[] (có thể undefined)
+
+hasLabel: boolean
+
+analyzeWithModel():
+
+Nếu !hasLabel ⇒ không chạy supervised metrics.
+
+Thay bằng pipeline unlabeled: anomaly score + top anomalies + summary.
+
+AC
+
+Dataset không có label:
+
+API trả mode = unlabeled
+
+metrics = null/undefined
+
+UI ẩn Accuracy/Precision/Recall/F1
+
+Dataset có label: metrics chuẩn.
+
+5) Sửa “Feature importance / reason” để không tự chứng minh (prediction ≠ ground truth)
+Vấn đề
+
+Bạn đang tính feature importance và “lý do” dựa trên allPredictions như là label ⇒ vòng lặp tự chứng minh.
+
+Cần sửa
+
+Supervised: featureImportance(featuresScaled, trueLabels)
+
+Unlabeled:
+
+tính theo anomaly score (corr với score, hoặc permutation importance theo score)
+
+Tách explainSupervised() và explainUnlabeled()
+
+AC
+
+Feature importance thay đổi khi ground truth thay đổi (supervised).
+
+Unlabeled: importance/summary gắn với anomaly score chứ không “bịa” dựa theo predicted class.
+
+6) Fix bug LOF trong anomaly pipeline
+Vấn đề
+
+LOF scoring hiện tại dùng sai index (không phải point đang xét) ⇒ score nhiễu.
+
+Cần sửa
+
+Với từng điểm i: dùng đúng features[i] để predict/score.
+
+Nếu LOF chỉ fit trên sample:
+
+fit trên sample
+
+nhưng predict score cho từng điểm i bằng lof.predict([features[i]])
+
+AC
+
+Score ổn định hơn, không phụ thuộc “lofIdx” sai.
+
+Top anomalies hợp lý hơn (không random).
+
+7) Làm kết quả “deterministic” (seed mọi chỗ random)
+Vấn đề
+
+Shuffle/split/CV/model init random khiến chạy lại ra kết quả khác → khó debug và khó so sánh.
+
+Cần sửa
+
+Tạo RNG có seed (ví dụ seedrandom)
+
+Các hàm shuffle/split/folds dùng RNG này.
+
+(Nếu tree/forest có randomness) cũng dùng seed.
+
+AC
+
+Cùng dataset + cùng seed → output y hệt.
+
+8) Bộ test tối thiểu (để không sửa xong lại hỏng)
+Nên có ít nhất 8 test:
+
+CSV parse quotes đúng (nếu bạn sửa parser)
+
+Split indices cố định theo seed
+
+GridSearch dùng folds cố định
+
+Scaling consistency: transform train vs inference đúng scaler
+
+Supervised: metrics không null khi có label
+
+Unlabeled: metrics null khi không label
+
+Feature importance dùng true labels (supervised)
+
+LOF scoring theo đúng point i
